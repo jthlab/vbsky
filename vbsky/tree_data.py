@@ -2,7 +2,7 @@ import dataclasses
 import itertools
 from dataclasses import dataclass
 from io import StringIO
-from typing import Dict, Tuple, NamedTuple, Union
+from typing import Dict, NamedTuple, Tuple, Union
 
 import jax
 import networkx as nx

@@ -5,10 +5,9 @@ from typing import Tuple
 
 import jax
 import jax.numpy as jnp
-from jax.experimental.host_callback import id_print
 
-from tree_data import TreeData
-import substitution
+from . import substitution
+from .tree_data import TreeData
 
 scan_ = jax.lax.scan
 

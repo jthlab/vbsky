@@ -1,6 +1,5 @@
 import csv
 import functools
-from enum import IntEnum
 from typing import Dict, NamedTuple, Tuple
 
 import jax
@@ -11,7 +10,7 @@ from jax import numpy as jnp
 from jax.experimental.host_callback import id_tap
 from jax.lib import pytree
 
-from tree_data import TreeData
+from .tree_data import TreeData
 
 
 class TipData(NamedTuple):

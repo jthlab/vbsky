@@ -1,13 +1,13 @@
 import jax
-from jax import vmap
 import jax.numpy as jnp
+from jax import vmap
 from jax.experimental.host_callback import id_print
-from jax.scipy.special import xlogy, xlog1py
+from jax.scipy.special import xlog1py, xlogy
 
-from tree_data import TreeData
-from util import order_events, TipData
-from substitution import SubstitutionModel
-import prune
+from . import prune
+from .substitution import SubstitutionModel
+from .tree_data import TreeData
+from .util import TipData, order_events
 
 
 def _tree_loglik(

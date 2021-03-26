@@ -1,9 +1,9 @@
+import re
 from typing import NamedTuple
+
 import jax.numpy as jnp
 import msprime as msp
-
 import numpy as np
-import re
 
 # copied from beast.evolution.datatype.Nucleotide
 BEAST_RATES = """
