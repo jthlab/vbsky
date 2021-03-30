@@ -43,6 +43,7 @@ def _tree_loglik(
     def f(pi1, d):
         # pi1 = p_{i+1}(t_i)
         B_i = ((1 - 2 * (1 - d["rho"]) * pi1) * d["lam"] + d["mu"] + d["psi"]) / d["A"]
+
         Adt = d["A"] * d["dt"]  # A_i (t_i - t_{i-1})
         # fix a numerical issue
         bad = jnp.isclose(B_i, -1.0)
@@ -53,18 +54,35 @@ def _tree_loglik(
             ((1 + B_safe) - jnp.exp(-Adt) * (1 - B_safe))
             / ((1 + B_safe) + jnp.exp(-Adt) * (1 - B_safe)),
         )
+        # if dt >> 1, psi=0 then f~=1, A=|lam-mu| and
+        # p_i~=(lam+mu-|lam-mu|)/(2 lam) = { mu/lam, lam>mu; 1 otherwise. this presents a problem when we go to take
         p_i = (d["lam"] + d["mu"] + d["psi"] - d["A"] * f) / (2 * d["lam"])
+        if True:
+            p_i, _ = id_print((p_i, {"p_i": p_i, "B_i": B_i, "d": d}))
         return p_i, B_i
 
     dt = jnp.diff(times)
     A = jnp.sqrt((lam - mu - psi) ** 2 + (4 * lam * psi))
+    if dbg:
+        A = id_print(A, what="A")
     # xs = id_print(xs)
     p1_0, B = jax.lax.scan(
         f,
         1.0,
-        {"A": A, "lam": lam, "mu": mu, "psi": psi, "rho": rho, "dt": dt},
+        {
+            "A": A,
+            "lam": lam,
+            "mu": mu,
+            "psi": psi,
+            "rho": rho,
+            "dt": dt,
+            "i": jnp.arange(len(A)),
+        },
         reverse=True,
     )
+
+    if dbg:
+        p1_0, B = id_print((p1_0, B), what="p1_0,B")
 
     x = xs[td.n :]  # transmission times
     y = xs[: td.n]  # times of sampled nodes
@@ -82,7 +100,15 @@ def _tree_loglik(
         A_i, B_i = [jnp.take(x, i - 1) for x in (A, B)]
         t_i = jnp.take(times, i)
         Adt = A_i * (t - t_i)
-        return jnp.log(4) + Adt - 2 * jnp.log(abs(jnp.exp(Adt) * (1 - B_i) + (1 + B_i)))
+        if dbg:
+            Adt, B_i = id_print((Adt, B_i), what="Adt,B_i")
+        # return jnp.log(4) + Adt - 2 * jnp.log(abs(jnp.exp(Adt) * (1 - B_i) + (1 + B_i)))
+        m1 = jnp.isclose(B_i, -1.0)
+        safe = jnp.where(m1, 0.0, B_i)
+        f = jnp.where(
+            m1, Adt + jnp.log(2.0), jnp.log(abs(jnp.exp(Adt) * (1 - safe) + (1 + safe)))
+        )
+        return jnp.log(4) + Adt - 2 * f
 
     # now calculate n_i, the number of d2 vertices at each time point.
     node_is_sample = td.n <= jnp.arange(2 * td.n - 1)
@@ -107,7 +133,7 @@ def _tree_loglik(
     # First the easy one:
     l1 = log_q(1, times[0])
     if condition_on_survival:
-        l1 -= jnp.log1p(-jnp.clip(p1_0, 0.0, 1 - 1e-7))
+        l1 -= jnp.log1p(-jnp.clip(p1_0, 0.0, 1 - 1e-20))
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0) / (1 - p_1(t_0))]")
     loglik = l1
@@ -120,6 +146,8 @@ def _tree_loglik(
 
     # \prod_{i=1}^n \psi(y_i)(y_i) / q_\ell(y_i)(y_i)
     l3 = xlogy(sampled_leaves, jnp.take(psi, Iy - 1)) - sampled_leaves * log_q(Iy, y)
+    if dbg:
+        l3 = id_print(l3, what=r"\prod_{i=1}^n \psi(y_i)(y_i) / q_\ell(y_i)(y_i)")
     loglik += l3.sum()
 
     # \prod_{i=1}^m [(1-rho_i)q_{i+1}(t_i)]^{n_i}
@@ -128,10 +156,14 @@ def _tree_loglik(
     log_qi1_ti = log_q(i + 1, times[1:-1])
     l41 = xlog1py(n_i, -rho)
     l42 = n_i[:-1] * log_qi1_ti
+    if dbg:
+        l41, l42 = id_print((l41, l42), what=r"(1-rho[i])^n_i, q_{i+1}(ti)^n_i")
     loglik += l41.sum() + l42.sum()
 
     # \prod_{i=1}^m rho_i^N_i
     l5 = xlogy(N_i, rho)
+    if dbg:
+        l5 = id_print(l5, what=r"rho_i^N_i")
     loglik += l5.sum()
 
     return loglik
@@ -148,25 +180,24 @@ def _bdsky_transform(params):
     return lam, psi, mu, rho
 
 
-def _lognorm_logpdf(x, mu, sigma):
-    log_x = jnp.log(x)
-    return jnp.where(
-        x > 0, jax.scipy.stats.norm.logpdf((log_x - mu) / sigma) - log_x, -jnp.inf
-    )
+def _lognorm_logpdf(log_x, mu, sigma):
+    return jax.scipy.stats.norm.logpdf((log_x - mu) / sigma) - log_x
 
 
 def _params_prior_loglik(params):
+    # TODO move this
     # uninformative gamma prior on tau
     tau = params["precision"][0]
     ll = jax.scipy.stats.gamma.logpdf(tau, a=0.001, scale=1 / 0.001)
     ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 9999)
+
     # marginal priors
     for k in ["R", "delta", "x1"]:
-        ll += _lognorm_logpdf(params[k], mu=1.0, sigma=1.25).sum()
+        log_rate = jnp.log(params[k])
+        ll += _lognorm_logpdf(log_rate, mu=1.0, sigma=1.25).sum()
         # ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
         # m = len(log_rate)
         # ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
-
     #     # gmrf with precision tau
     #     for rate in bdsky_transform(params):
     #             m = len(rate)
@@ -195,6 +226,8 @@ def loglik(
 
     lam, psi, mu, rho = _bdsky_transform(params)
 
+    # params["root_height"] = id_print(params["root_height"], what="root_height")
+
     # Convert proportions and root height to internal node heights.
     root_height = params["root_height"][0]
     node_heights = tr_d.height_transform(
@@ -203,9 +236,7 @@ def loglik(
     )
 
     # Convert node heights to branch lengths
-    # node_heights = id_print(node_heights, what="node_heights")
     branch_lengths = node_heights[tr_d.child_parent[:-1]] - node_heights[:-1]
-    # branch_lengths = id_print(branch_lengths, what="branch_lengths")
 
     # likelihood of tree under bdsky prior
     # create time points: grid of m equispaced intervals
@@ -219,9 +250,14 @@ def loglik(
     )
 
     # likelihood of data given tree: map across all columns of the alignment
+    # branch_lengths = id_print(branch_lengths, what="branch_lengths")
     data_ll = (
-        vmap(prune.prune_loglik, (None, None, 0, None))(
-            branch_lengths, Q, tp_d.partials, tr_d
+        vmap(prune.prune_loglik, (None, None, 0, None, None))(
+            branch_lengths * params["clock_rate"][0],
+            Q,
+            tp_d.partials,
+            tr_d,
+            dbg,
         )
         * tp_d.counts
     ).sum()
