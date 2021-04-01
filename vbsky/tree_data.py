@@ -189,7 +189,7 @@ class TreeData(NamedTuple):
         mapping = {
             clade: (
                 clade.name if clade.name is not None else f"internal{next(i)}",
-                clade.branch_length,
+                clade.branch_length or 1,
             )
             for clade in G.nodes
         }

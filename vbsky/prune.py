@@ -84,13 +84,14 @@ def _compute_preorder_partials(
     return pre, const
 
 
-@partial(jax.custom_jvp, nondiff_argnums=(3, 4))
+@partial(jax.custom_jvp, nondiff_argnums=(3, 4, 5))
 def prune_loglik(
     branch_lengths: jnp.ndarray,
     Q: substitution.SubstitutionModel,
     tip_partials: jnp.ndarray,
     td: TreeData,
     rescale: bool = True,
+    dbg: bool = False,
 ) -> float:
     """Compute log-likelihood using tree-pruning algorithm.
 
@@ -119,7 +120,7 @@ def prune_loglik(
 
 
 @prune_loglik.defjvp
-def prune_loglik_jvp(td: TreeData, rescale, primals, tangents):
+def prune_loglik_jvp(td: TreeData, rescale: bool, dbg: bool, primals, tangents):
     branch_lengths, Q, tip_partials = primals
     branch_lengths_dot, *_ = tangents
     post, log_post_const = _compute_postorder_partials(

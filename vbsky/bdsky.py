@@ -54,12 +54,29 @@ def _tree_loglik(
             ((1 + B_safe) - jnp.exp(-Adt) * (1 - B_safe))
             / ((1 + B_safe) + jnp.exp(-Adt) * (1 - B_safe)),
         )
-        # if dt >> 1, psi=0 then f~=1, A=|lam-mu| and
-        # p_i~=(lam+mu-|lam-mu|)/(2 lam) = { mu/lam, lam>mu; 1 otherwise. this presents a problem when we go to take
+        # if dt >> 1, psi=0 then f~=1, A=|lam-mu| and p_i~=(lam+mu-|lam-mu|)/(2 lam) = min(mu/lam,1.)
+        # this causes problems when we condition on survival (division by 1-p1).
         p_i = (d["lam"] + d["mu"] + d["psi"] - d["A"] * f) / (2 * d["lam"])
-        if True:
-            p_i, _ = id_print((p_i, {"p_i": p_i, "B_i": B_i, "d": d}))
+        # p_i = 0.5 * (1.0 + (d["mu"] + d["psi"] - d["A"] * f) / d["lam"])
+        # p_i = 2 * (1 + (d["mu"] + d["psi"] - d["A"] * f) / (4 * d["lam"]))
+        # 1mp_i = (d["lam"] - d["mu"] - d["psi"] + d["A"] * f) / (2 * d["lam"])
+        # if True:
+        #     p_i, _ = id_print(
+        #         (
+        #             p_i,
+        #             {
+        #                 "p_i": p_i,
+        #                 "B_i": B_i,
+        #                 "d": d,
+        #                 "f": f,
+        #                 "lam/(lam+mu)": d["lam"] / (d["lam"] + d["mu"]),
+        #             },
+        #         )
+        #     )
         return p_i, B_i
+
+    # 1-p1_0 is the probability that the initial carrier has >0 sampled lineages. this probability is lower bounded
+    # by the probability that the first event is a birth instead of death: 1-p1_0 >= lam/(lam+mu)
 
     dt = jnp.diff(times)
     A = jnp.sqrt((lam - mu - psi) ** 2 + (4 * lam * psi))
@@ -133,7 +150,7 @@ def _tree_loglik(
     # First the easy one:
     l1 = log_q(1, times[0])
     if condition_on_survival:
-        l1 -= jnp.log1p(-jnp.clip(p1_0, 0.0, 1 - 1e-20))
+        l1 -= jnp.log1p(-p1_0)
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0) / (1 - p_1(t_0))]")
     loglik = l1

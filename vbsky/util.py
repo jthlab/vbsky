@@ -1,8 +1,13 @@
+import abc
 import functools
-from typing import NamedTuple
+from dataclasses import asdict, dataclass, astuple
+from typing import NamedTuple, Generic, TypeVar, Type
 
 import numpy as np
 from jax import numpy as jnp
+from jax.tree_util import register_pytree_node_class
+
+T = TypeVar("T")
 
 
 class TipData(NamedTuple):

@@ -1,4 +1,5 @@
 import re
+from functools import partial
 from typing import NamedTuple
 
 import jax.numpy as jnp
@@ -6,7 +7,7 @@ import msprime as msp
 import numpy as np
 
 # copied from beast.evolution.datatype.Nucleotide
-BEAST_RATES = """
+BEAST_PARTIALS = """
 {0}, // A
 {1}, // C
 {2}, // G
@@ -30,7 +31,7 @@ BEAST_RATES = """
 
 PARTIAL_DICT = {
     s[-1]: np.eye(4)[list(eval(re.match(r"\{[^}]+\}", s)[0]))].sum(0)
-    for s in BEAST_RATES.splitlines()[1:]
+    for s in BEAST_PARTIALS.splitlines()[1:]
 }
 
 
@@ -69,23 +70,8 @@ class SubstitutionModel(NamedTuple):
         return jnp.clip(ret, 1e-40, 1.0)
 
 
-def JC69() -> SubstitutionModel:
-    mm = msp.JC69MutationModel()
-    Q = mm.transition_matrix
-    Q -= np.diag(Q.sum(1))
-    pi = mm.root_distribution
-    d, P = np.linalg.eigh(Q)
-    assert np.allclose(P @ np.diag(d) @ P.T, Q)
-
-    class JC69SubstitutionModel(SubstitutionModel):
-        pass
-
-    ret = JC69SubstitutionModel(pi, P, d, P.T)
-    assert np.allclose(ret.Q, Q)
-    return ret
-
-
 def HKY(kappa: float = 1) -> SubstitutionModel:
+    "HKY(kappa) substitution matrix."
     mm = msp.HKYMutationModel(kappa)
     Q = mm.transition_matrix
     Q -= np.diag(Q.sum(1))
@@ -99,3 +85,8 @@ def HKY(kappa: float = 1) -> SubstitutionModel:
     ret = HKYSubstitutionModel(pi, P, d, P.T)
     assert np.allclose(ret.Q, Q)
     return ret
+
+
+def JC69() -> SubstitutionModel:
+    "JC69 substitution model"
+    return HKY(1.0)
