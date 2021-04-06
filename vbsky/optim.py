@@ -31,8 +31,6 @@ def unpack(samples):
     return unpacked_samples
 
 
-@partial(jit, static_argnums=(1, 7, 8))
-@value_and_grad
 def loss(
     params: dict[str, Any],
     flows: VF,
@@ -40,7 +38,7 @@ def loss(
     tip_data: TipData,
     rng: jax.random.PRNGKey,
     Q: SubstitutionModel,
-    c: jnp.ndarray,
+    c: tuple[bool, bool, bool],
     M: int,
     dbg: bool,
 ):
@@ -48,33 +46,53 @@ def loss(
     samples = {}
     elbo1 = 0.0
     # elbo = E_{x~q(theta)} log p(x) - log q(x;theta)
+    if dbg:
+        params = id_print(params, what="params")
     for k, v in flows.items():
         p = params[k]
         rng, subrng = jax.random.split(rng)
         # sample from each component of the variational prior
         samples[k] = v.sample(subrng, p, M)
-        e = vmap(v.log_pdf, (None, 0))(p, samples[k]).mean()
+        # p_prime = jax.lax.stop_gradient(p)
+        e = jnp.mean(vmap(v.log_pdf, (None, 0))(p, samples[k]))
         if dbg:
             e = id_print(e, what=f"entropy[{k}]")
         elbo1 -= e
 
-    elbo2 = vmap(loglik, (0,) + (None,) * 6)(
-        unpack(samples), tree_data, tip_data, Q, c, dbg, True
-    ).mean()
-    # elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
+    if dbg:
+        samples = id_print(samples, what="samples")
+
+    elbo2 = jnp.mean(
+        vmap(loglik, (0,) + (None,) * 6)(
+            unpack(samples), tree_data, tip_data, Q, c, dbg, True
+        )
+    )
+    if dbg:
+        elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
     return -(elbo1 + elbo2)
 
 
 def step(i, velocity, M, flows, params, tree_data, tip_data, Q, c, dbg):
     x0, unravel = ravel_pytree(params)
 
-    def obj(x):
+    def obj(x, rng):
         p = unravel(x)
-        return loss(p, flows, tree_data, tip_data, jax.random.PRNGKey(i), Q, c, M, dbg)
+        return loss(p, flows, tree_data, tip_data, rng, Q, c, M, dbg)
 
-    f0, g0 = obj(x0)
-    g0, _ = ravel_pytree(g0)
-    p = -g0 / jnp.linalg.norm(g0)
+    rng = jax.random.PRNGKey(i)
+    while True:
+        try:
+            f0, g0 = obj(x0, rng)
+            assert jnp.isfinite(f0).all()
+            g0, _ = ravel_pytree(g0)
+            assert jnp.isfinite(g0).all()
+            p = -g0 / jnp.linalg.norm(g0)
+            assert jnp.isfinite(p).all()
+            break
+        except AssertionError:
+            breakpoint()
+            print("randomizing to avoid nans")
+            _, rng = jax.random.split(rng)
 
     mass = 0.9
     if velocity is None:
@@ -86,14 +104,14 @@ def step(i, velocity, M, flows, params, tree_data, tip_data, Q, c, dbg):
     t = -0.5 * m
 
     def cond(ss):
-        f, g = obj(x0 + ss * p)
+        f, g = obj(x0 + ss * p, rng)
         g, _ = ravel_pytree(g)
         f = id_print(f, what="f")
         cond1 = jnp.isfinite(f)
         cond2 = jnp.isfinite(g).all()
-        armijo = f0 - f >= ss * t
-        fail = jnp.isclose(ss, 0.0)
-        stop = (cond1 & cond2 & armijo) | fail
+        armijo = f0 - f >= ss * t - 1e-7
+        # fail = jnp.isclose(ss, 0.0)
+        stop = cond1 & cond2 & armijo  # | fail
         return ~stop
 
     def body(ss):
@@ -105,6 +123,6 @@ def step(i, velocity, M, flows, params, tree_data, tip_data, Q, c, dbg):
     while cond(ss):
         ss = body(ss)
     x_star = x0 + ss * p
-    f, g = obj(x_star)
+    f, g = obj(x_star, rng)
     i, f = id_print((i, f), what="i,f")
     return f, unravel(x_star), g, velocity

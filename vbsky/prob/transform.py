@@ -1,11 +1,13 @@
 import abc
 from dataclasses import dataclass
+from functools import partial
 from typing import Type, Dict, Tuple, Union
 
 import jax
 import numpy as np
 from jax import numpy as jnp, vmap
 from jax._src.scipy.special import expit, logit
+from jax.experimental.host_callback import id_print
 
 from vbsky.prob.distribution import Distribution, MeanField
 
@@ -65,16 +67,21 @@ def Transform(
     return TransformedDistribution(f.dim)
 
 
+@dataclass
 class Shift(Transformation):
+    c: jnp.ndarray = None
+
     @property
     def params(self):
-        return {"c": jnp.zeros(self.dim)}
+        if self.c is None:
+            return {"c": jnp.zeros(self.dim)}
+        return {}
 
     def direct(self, params, x):
-        return x + params["c"]
+        return x + params.get("c", self.c)
 
     def inverse(self, params, y):
-        return y - params["c"]
+        return y - params.get("c", self.c)
 
     def log_det_jac(self, params, x):
         return 0.0
@@ -82,18 +89,22 @@ class Shift(Transformation):
 
 @dataclass
 class Scale(Transformation):
+    c: jnp.ndarray = None
+
     @property
     def params(self) -> dict:
-        return {"log_sigma": jnp.zeros(self.dim)}
+        if self.c is None:
+            return {"c": jnp.zeros(self.dim)}
+        return {}
 
     def direct(self, params, x):
-        return jnp.exp(params["log_sigma"]) * x
+        return jnp.exp(params.get("c", self.c)) * x
 
     def inverse(self, params, y):
-        return jnp.exp(-params["log_sigma"]) * y
+        return jnp.exp(-params.get("c", self.c)) * y
 
     def log_det_jac(self, params, x):
-        return params["log_sigma"].sum()
+        return params.get("c", self.c).sum()
 
 
 @dataclass
@@ -128,7 +139,6 @@ class Affine(Transformation):
 
 @dataclass
 class DiagonalAffine(Transformation):
-
     """X -> exp(log_sigma)*X + mu"""
 
     @property
@@ -199,35 +209,26 @@ def Blockwise(
     def split(A):
         return dict(zip(blocks, jnp.split(A, splits, axis=-1)))
 
+    kTb = list(zip(blocks, transformations, block_sizes))
+
     @dataclass
     class Block(Transformation):
         @property
         def params(self):
-            return {k: T(b).params for k, (b, T) in blocks.items()}
+            return {k: T(b).params for k, T, b in kTb}
 
         def direct(self, params, u):
             assert u.shape[-1] == dim
             arys = split(u)
-            return {
-                k: T(b).direct(params[k], arys[k])
-                for k, T, b in zip(blocks, transformations, block_sizes)
-            }
+            return {k: T(b).direct(params[k], arys[k]) for k, T, b in kTb}
 
         def log_det_jac(self, params, u):
             arys = split(u)
-            return sum(
-                [
-                    T(b).log_det_jac(params[k], arys[k])
-                    for k, T, b in zip(blocks, transformations, block_sizes)
-                ]
-            )
+            return sum([T(b).log_det_jac(params[k], arys[k]) for k, T, b in kTb])
 
         def inverse(self, params, d):
             return jnp.concatenate(
-                [
-                    T(b).inverse(params[k], d[k])
-                    for k, T, b in zip(blocks, transformations, block_sizes)
-                ],
+                [T(b).inverse(params[k], d[k]) for k, T, b in kTb],
                 axis=-1,
             )
 
@@ -371,3 +372,11 @@ def Householder(rank: int = 1) -> Type[Transformation]:
             return 0.0
 
     return Compose(*[HH for _ in range(rank)])
+
+
+def Bounded(low, high) -> Transform:
+    return Compose(
+        ZeroOne,
+        lambda dim: Scale(dim=dim, c=jnp.log(high - low)),
+        lambda dim: Shift(dim=dim, c=low),
+    )

@@ -1,8 +1,10 @@
+from typing import Tuple
+
 import jax
 import jax.numpy as jnp
 from jax import vmap
 from jax.experimental.host_callback import id_print
-from jax.scipy.special import xlog1py, xlogy
+from jax.scipy.special import xlog1py, xlogy, logit, expit
 
 from . import prune
 from .substitution import SubstitutionModel
@@ -40,40 +42,56 @@ def _tree_loglik(
     assert m + 1 == len(times)
 
     # 2. Recursion for B_i and {p,q}_{i+1}(t_i).
-    def f(pi1, d):
+    def f(tup, d):
+        pi1, logit_pi1 = tup
         # pi1 = p_{i+1}(t_i)
         B_i = ((1 - 2 * (1 - d["rho"]) * pi1) * d["lam"] + d["mu"] + d["psi"]) / d["A"]
-
         Adt = d["A"] * d["dt"]  # A_i (t_i - t_{i-1})
-        # fix a numerical issue
-        bad = jnp.isclose(B_i, -1.0)
-        B_safe = jnp.where(bad, 0.0, B_i)
-        f = jnp.where(
-            bad,
-            -1.0,
-            ((1 + B_safe) - jnp.exp(-Adt) * (1 - B_safe))
-            / ((1 + B_safe) + jnp.exp(-Adt) * (1 - B_safe)),
+        # f is numerically tricky since B_i can be close to (or equal) -1,1 while Adt can be >> 1
+        f = ((1 + B_i) - jnp.exp(-Adt) * (1 - B_i)) / (
+            (1 + B_i) + jnp.exp(-Adt) * (1 - B_i)
         )
-        # if dt >> 1, psi=0 then f~=1, A=|lam-mu| and p_i~=(lam+mu-|lam-mu|)/(2 lam) = min(mu/lam,1.)
-        # this causes problems when we condition on survival (division by 1-p1).
-        p_i = (d["lam"] + d["mu"] + d["psi"] - d["A"] * f) / (2 * d["lam"])
-        # p_i = 0.5 * (1.0 + (d["mu"] + d["psi"] - d["A"] * f) / d["lam"])
-        # p_i = 2 * (1 + (d["mu"] + d["psi"] - d["A"] * f) / (4 * d["lam"]))
-        # 1mp_i = (d["lam"] - d["mu"] - d["psi"] + d["A"] * f) / (2 * d["lam"])
-        # if True:
-        #     p_i, _ = id_print(
-        #         (
-        #             p_i,
-        #             {
-        #                 "p_i": p_i,
-        #                 "B_i": B_i,
-        #                 "d": d,
-        #                 "f": f,
-        #                 "lam/(lam+mu)": d["lam"] / (d["lam"] + d["mu"]),
-        #             },
-        #         )
-        #     )
-        return p_i, B_i
+        g = f  # jnp.where(jnp.isfinite(f), f, -1.0)
+        p_i = jnp.minimum(
+            (d["lam"] + d["mu"] + d["psi"] - d["A"] * g) / (2 * d["lam"]), 1.0
+        )
+        q = d["dt"] * (d["lam"] - d["mu"])
+        logit_pi = jnp.where(
+            jnp.isfinite(logit(p_i)),
+            logit(p_i),
+            jnp.where(
+                jnp.isclose(d["psi"], 0.0) & jnp.isclose(d["rho"], 0.0),
+                jnp.where(
+                    d["lam"] < d["mu"],
+                    logit_pi1
+                    - jnp.log(pi1)
+                    - q
+                    - (d["lam"] - jnp.exp(q) * d["mu"])
+                    * (1.0 - pi1)
+                    / (d["lam"] - d["mu"]),
+                    jnp.log(d["mu"] / (d["lam"] - d["mu"])),
+                ),
+                logit(p_i),
+            ),
+        )
+        # p_i, logit_pi, _ = id_print(
+        #     (
+        #         p_i,
+        #         logit_pi,
+        #         {
+        #             "logit(p_i)": logit(p_i),
+        #             "expit(...)": expit(logit_pi),
+        #             "pi1": pi1,
+        #             "logit_pi1": logit_pi1,
+        #             "q": q,
+        #             "d": d,
+        #             "B_i": B_i,
+        #             "f": f,
+        #         },
+        #     ),
+        #     what="logit(p_i)",
+        # )
+        return (p_i, logit_pi), B_i
 
     # 1-p1_0 is the probability that the initial carrier has >0 sampled lineages. this probability is lower bounded
     # by the probability that the first event is a birth instead of death: 1-p1_0 >= lam/(lam+mu)
@@ -83,9 +101,9 @@ def _tree_loglik(
     if dbg:
         A = id_print(A, what="A")
     # xs = id_print(xs)
-    p1_0, B = jax.lax.scan(
+    (p1_0, logit_p1_0), B = jax.lax.scan(
         f,
-        1.0,
+        (1.0, 0.0),
         {
             "A": A,
             "lam": lam,
@@ -99,7 +117,7 @@ def _tree_loglik(
     )
 
     if dbg:
-        p1_0, B = id_print((p1_0, B), what="p1_0,B")
+        p1_0, logit_p1_0, B = id_print((p1_0, logit_p1_0, B), what="p1_0,B")
 
     x = xs[td.n :]  # transmission times
     y = xs[: td.n]  # times of sampled nodes
@@ -149,8 +167,13 @@ def _tree_loglik(
     # Finally, compute each term in the likelihood (Thm. 1)
     # First the easy one:
     l1 = log_q(1, times[0])
+    if dbg:
+        l1 = id_print(l1, what="log[q_1(t_0)]")
     if condition_on_survival:
-        l1 -= jnp.log1p(-p1_0)
+        # l1_1 = jnp.where(logit_p1_0 > 10, -logit_p1_0, -jnp.log1p(jnp.exp(logit_p1_0)))
+        # l1_1, _ = id_print((l1_1, jnp.log1p(-p1_0)), what="l11")
+        l1_1 = jnp.log1p(-p1_0)
+        l1 -= l1_1
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0) / (1 - p_1(t_0))]")
     loglik = l1
@@ -212,9 +235,9 @@ def _params_prior_loglik(params):
     for k in ["R", "delta", "x1"]:
         log_rate = jnp.log(params[k])
         ll += _lognorm_logpdf(log_rate, mu=1.0, sigma=1.25).sum()
-        # ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
-        # m = len(log_rate)
-        # ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
+        ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
+        m = len(log_rate)
+        ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
     #     # gmrf with precision tau
     #     for rate in bdsky_transform(params):
     #             m = len(rate)
@@ -229,17 +252,22 @@ def loglik(
     tr_d: TreeData,
     tp_d: TipData,
     Q: SubstitutionModel,
-    c: jnp.ndarray = jnp.ones(3),
+    c: tuple[bool, bool, bool],
     dbg: bool = False,
     condition_on_survival: bool = True,
 ):
+    # params["x1"] = params["x1rh"][:1]
+    # params["root_height"] = params["x1rh"][1:]
     # There should be one proportion for each internal branch except the root.
     assert len(params["proportions"]) == tr_d.n - 2
     assert len(params["R"]) == len(params["s"]) == len(params["delta"])
     assert params["root_height"].ndim == params["root_height"].size == 1
 
     # transform to the bdsky model parameters
-    params_prior_ll = _params_prior_loglik(params)
+    loglik = 0.0
+    if c[0]:
+        params_prior_ll = _params_prior_loglik(params)
+        loglik += params_prior_ll
 
     lam, psi, mu, rho = _bdsky_transform(params)
 
@@ -262,26 +290,25 @@ def loglik(
     times = jnp.linspace(0, tm, m + 1)
     # times = id_print(times)
     xs = tm - node_heights
-    tree_prior_ll = _tree_loglik(
-        lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
-    )
+    if c[1]:
+        tree_prior_ll = _tree_loglik(
+            lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
+        )
+        loglik += tree_prior_ll
 
     # likelihood of data given tree: map across all columns of the alignment
     # branch_lengths = id_print(branch_lengths, what="branch_lengths")
-    data_ll = (
-        vmap(prune.prune_loglik, (None, None, 0, None, None))(
-            branch_lengths * params["clock_rate"][0],
-            Q,
-            tp_d.partials,
-            tr_d,
-            dbg,
-        )
-        * tp_d.counts
-    ).sum()
+    if c[2]:
+        data_ll = (
+            vmap(prune.prune_loglik, (None, None, 0, None, None))(
+                branch_lengths * params["clock_rate"][0],
+                Q,
+                tp_d.partials,
+                tr_d,
+                dbg,
+            )
+            * tp_d.counts
+        ).sum()
+        loglik += data_ll
 
-    if dbg:
-        params_prior_ll, tree_prior_ll, data_ll = id_print(
-            (params_prior_ll, tree_prior_ll, data_ll), what="lls"
-        )
-
-    return c[0] * params_prior_ll + c[1] * tree_prior_ll + c[2] * data_ll
+    return loglik
