@@ -1,13 +1,11 @@
 import abc
 from dataclasses import dataclass
-from functools import partial
 from typing import Type, Dict, Tuple, Union
 
 import jax
 import numpy as np
 from jax import numpy as jnp, vmap
 from jax._src.scipy.special import expit, logit
-from jax.experimental.host_callback import id_print
 
 from vbsky.prob.distribution import Distribution, MeanField
 
@@ -67,21 +65,16 @@ def Transform(
     return TransformedDistribution(f.dim)
 
 
-@dataclass
 class Shift(Transformation):
-    c: jnp.ndarray = None
-
     @property
     def params(self):
-        if self.c is None:
-            return {"c": jnp.zeros(self.dim)}
-        return {}
+        return {"c": jnp.zeros(self.dim)}
 
     def direct(self, params, x):
-        return x + params.get("c", self.c)
+        return x + params["c"]
 
     def inverse(self, params, y):
-        return y - params.get("c", self.c)
+        return y - params["c"]
 
     def log_det_jac(self, params, x):
         return 0.0
@@ -89,22 +82,18 @@ class Shift(Transformation):
 
 @dataclass
 class Scale(Transformation):
-    c: jnp.ndarray = None
-
     @property
     def params(self) -> dict:
-        if self.c is None:
-            return {"c": jnp.zeros(self.dim)}
-        return {}
+        return {"log_sigma": jnp.zeros(self.dim)}
 
     def direct(self, params, x):
-        return jnp.exp(params.get("c", self.c)) * x
+        return jnp.exp(params["log_sigma"]) * x
 
     def inverse(self, params, y):
-        return jnp.exp(-params.get("c", self.c)) * y
+        return jnp.exp(-params["log_sigma"]) * y
 
     def log_det_jac(self, params, x):
-        return params.get("c", self.c).sum()
+        return params["log_sigma"].sum()
 
 
 @dataclass
@@ -139,6 +128,7 @@ class Affine(Transformation):
 
 @dataclass
 class DiagonalAffine(Transformation):
+
     """X -> exp(log_sigma)*X + mu"""
 
     @property
@@ -209,26 +199,35 @@ def Blockwise(
     def split(A):
         return dict(zip(blocks, jnp.split(A, splits, axis=-1)))
 
-    kTb = list(zip(blocks, transformations, block_sizes))
-
     @dataclass
     class Block(Transformation):
         @property
         def params(self):
-            return {k: T(b).params for k, T, b in kTb}
+            return {k: T(b).params for k, (b, T) in blocks.items()}
 
         def direct(self, params, u):
             assert u.shape[-1] == dim
             arys = split(u)
-            return {k: T(b).direct(params[k], arys[k]) for k, T, b in kTb}
+            return {
+                k: T(b).direct(params[k], arys[k])
+                for k, T, b in zip(blocks, transformations, block_sizes)
+            }
 
         def log_det_jac(self, params, u):
             arys = split(u)
-            return sum([T(b).log_det_jac(params[k], arys[k]) for k, T, b in kTb])
+            return sum(
+                [
+                    T(b).log_det_jac(params[k], arys[k])
+                    for k, T, b in zip(blocks, transformations, block_sizes)
+                ]
+            )
 
         def inverse(self, params, d):
             return jnp.concatenate(
-                [T(b).inverse(params[k], d[k]) for k, T, b in kTb],
+                [
+                    T(b).inverse(params[k], d[k])
+                    for k, T, b in zip(blocks, transformations, block_sizes)
+                ],
                 axis=-1,
             )
 
@@ -245,7 +244,7 @@ def Concat(d1: Distribution, d2: Distribution):
         def params(self):
             return (d1.params, d2.params)
 
-        def sample(self, rng: jax.random.PRNGKey, params: T, n: int = 1) -> jnp.ndarray:
+        def sample(self, rng: jax.random.PRNGKey, params, n: int = 1) -> jnp.ndarray:
             rs = jax.random.split(rng, 2)
             s1, s2 = [f.sample(r, p, n) for r, f, p in zip(rs, [d1, d2], params)]
             return jnp.concatenate([s1, s2], axis=1)
@@ -258,6 +257,36 @@ def Concat(d1: Distribution, d2: Distribution):
             )
 
     return ConcatenatedDistribution(d1.dim + d2.dim)
+
+def Concat2(*args: Distribution):
+    """Concatenate two distributions: given distributions d1, d2, returns a distribution of dimension d1.dim + d2.dim
+    obtained by concatenating their outputs.
+    """
+    nd = len(args)
+    splits_dim = np.cumsum([d.dim for d in args])
+    splits = splits_dim[:-1]
+    dim = splits_dim[-1]
+
+    class ConcatenatedDistribution(Distribution):
+        @property
+        def params(self):
+            return tuple(d.params for d in args)
+
+        def sample(self, rng: jax.random.PRNGKey, params, n: int = 1) -> jnp.ndarray:
+            rs = jax.random.split(rng, nd)
+            ss = [f.sample(r, p, n) for r, f, p in zip(rs, args, params)]
+            return jnp.concatenate(ss, axis=1)
+
+        def log_pdf(self, params, x):
+            arys = jnp.split(x, splits, axis=-1)
+            log_pdfs = jnp.array([d.log_pdf(p, a) for d,p,a in zip(args, params, arys)])
+            return jnp.where(
+                (len(x) == self.dim),
+                log_pdfs.sum(),
+                -jnp.inf,
+            )
+
+    return ConcatenatedDistribution(dim)
 
 
 def Repeat(f: Distribution, out_dim: int):
