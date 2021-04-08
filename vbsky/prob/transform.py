@@ -233,32 +233,7 @@ def Blockwise(
 
     return Block
 
-
-def Concat(d1: Distribution, d2: Distribution):
-    """Concatenate two distributions: given distributions d1, d2, returns a distribution of dimension d1.dim + d2.dim
-    obtained by concatenating their outputs.
-    """
-
-    class ConcatenatedDistribution(Distribution):
-        @property
-        def params(self):
-            return (d1.params, d2.params)
-
-        def sample(self, rng: jax.random.PRNGKey, params, n: int = 1) -> jnp.ndarray:
-            rs = jax.random.split(rng, 2)
-            s1, s2 = [f.sample(r, p, n) for r, f, p in zip(rs, [d1, d2], params)]
-            return jnp.concatenate([s1, s2], axis=1)
-
-        def log_pdf(self, params, x):
-            return jnp.where(
-                (len(x) == self.dim),
-                d1.log_pdf(params[0], x[: d1.dim]) + d2.log_pdf(params[1], x[d1.dim :]),
-                -jnp.inf,
-            )
-
-    return ConcatenatedDistribution(d1.dim + d2.dim)
-
-def Concat2(*args: Distribution):
+def Concat(*args: Distribution):
     """Concatenate two distributions: given distributions d1, d2, returns a distribution of dimension d1.dim + d2.dim
     obtained by concatenating their outputs.
     """
