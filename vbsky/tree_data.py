@@ -148,7 +148,8 @@ class TreeData(NamedTuple):
         newick: str,
         return_node_mapping: bool = True,
         return_branch_lengths: bool = False,
-    ) -> Union[Tuple["TreeData", dict], Tuple["TreeData", dict, np.ndarray]]:
+        return_root_edge: bool = False
+    ) -> Union[Tuple["TreeData", dict], Tuple["TreeData", dict, np.ndarray], Tuple["TreeData", dict, np.ndarray, np.ndarray]]:
         """Construct tree data from a Newick tree. Assumes only leaf nodes are named.
 
         Returns:
@@ -201,6 +202,7 @@ class TreeData(NamedTuple):
                 u, v = next(iter(G1.in_edges(k)))
                 G1[u][v]["weight"] = mapping_blens[k]
             except StopIteration:
+                root_edge = mapping_blens[k]
                 pass  # root node has no in edges
 
         poly = [u for u in G1.nodes if G1.out_degree(u) > 2]
@@ -221,20 +223,24 @@ class TreeData(NamedTuple):
             G1.remove_edge(u, v)
 
         ret = td, nm = cls.from_nx(G1, "weight")
-        if not return_branch_lengths:
-            return ret
-        q = [(n, nm[n]) for n in G1.nodes]
-        bl = np.zeros(2 * td.n - 2)
-        while q:
-            n, j = q.pop()
-            try:
-                (u, v) = next(iter(G1.in_edges(n)))
-                assert v == n
-                bl[j] = G1[u][v]["weight"]
-                q.append((u, td.child_parent[j]))
-            except StopIteration:
-                pass  # root node has no in edges
-        return ret + (bl,)
+        if return_branch_lengths:
+            q = [(n, nm[n]) for n in G1.nodes]
+            bl = np.zeros(2 * td.n - 2)
+            while q:
+                n, j = q.pop()
+                try:
+                    (u, v) = next(iter(G1.in_edges(n)))
+                    assert v == n
+                    bl[j] = G1[u][v]["weight"]
+                    q.append((u, td.child_parent[j]))
+                except StopIteration:
+                    pass  # root node has no in edges
+            ret = ret + (bl,)
+
+        if return_root_edge:
+            ret = ret + (root_edge,)
+        
+        return ret
 
     def inverse_height_transform(self, heights) -> Tuple[float, np.ndarray]:
         """Inverse of height_transform(): given node heights, return the root height and proportions that

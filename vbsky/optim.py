@@ -40,6 +40,7 @@ def loss(
     Q: SubstitutionModel,
     c: tuple[tuple[bool, bool], tuple[bool, bool, bool]],
     dbg: bool,
+    equidistant_intervals: bool
 ):
     # approximate the loglik by monte carlo
     c1, c2 = c
@@ -66,12 +67,13 @@ def loss(
 
     elbo2 = 0.0
     if c1[1]:
-        s2 = vmap(loglik, (0,) + (None,) * 6)(
-            unpack(samples), tree_data, tip_data, Q, c2, dbg, True
+        s2 = vmap(loglik, (0,) + (None,) * 7)(
+            unpack(samples), tree_data, tip_data, Q, c2, dbg, True, equidistant_intervals
         )
         elbo2 += jnp.mean(s2)
     if dbg:
         elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
+    #elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
     return -(elbo1 + elbo2)
 
 
