@@ -382,19 +382,19 @@ def Compose(*args: Type[Transformation]) -> Type[Transformation]:
 
 
 def Householder(rank: int = 1) -> Type[Transformation]:
-    from jax.experimental import stax
-    from jax.experimental.stax import Dense, BatchNorm, Relu
+    # from jax.experimental import stax
+    # from jax.experimental.stax import Dense, BatchNorm, Relu
 
     class HH(Transformation):
         r: int = rank
 
-        def __post_init(self):
-            init_fun, self._nn = stax.serial(
-                Dense(4 * self.dim), BatchNorm(), Relu, Dense(2 * self.dim)
-            )
-            rng = jax.random.PRNGKey(0)
-            in_shape = (-1, self.dim)
-            out_shape, self._nn_params = init_fun(rng, in_shape)
+        # def __post_init(self):
+        #     init_fun, self._nn = stax.serial(
+        #         Dense(4 * self.dim), BatchNorm(), Relu, Dense(2 * self.dim)
+        #     )
+        #     rng = jax.random.PRNGKey(0)
+        #     in_shape = (-1, self.dim)
+        #     out_shape, self._nn_params = init_fun(rng, in_shape)
 
         @property
         def params(self):
