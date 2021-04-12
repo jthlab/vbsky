@@ -252,6 +252,7 @@ def Blockwise(
 
     return Block
 
+
 def Concat(*args: Distribution):
     """Concatenate two distributions: given distributions d1, d2, returns a distribution of dimension d1.dim + d2.dim
     obtained by concatenating their outputs.
@@ -273,7 +274,9 @@ def Concat(*args: Distribution):
 
         def log_pdf(self, params, x):
             arys = jnp.split(x, splits, axis=-1)
-            log_pdfs = jnp.array([d.log_pdf(p, a) for d,p,a in zip(args, params, arys)])
+            log_pdfs = jnp.array(
+                [d.log_pdf(p, a) for d, p, a in zip(args, params, arys)]
+            )
             return jnp.where(
                 (len(x) == self.dim),
                 log_pdfs.sum(),
@@ -395,12 +398,12 @@ def Householder(rank: int = 1) -> Type[Transformation]:
 
         @property
         def params(self):
-            return {"nn": self._nn_params, "V": jnp.ones((self.r, self.dim))}
+            return {"V": jnp.ones((self.r, self.dim))}
 
         def direct(self, params, x):
             V = params["V"]
             return jax.lax.scan(
-                lambda y, v: (y - 2 * v * jnp.dot(y, v) / jnp.dot(v, v), None), z0, V
+                lambda y, v: (y - 2 * v * jnp.dot(y, v) / jnp.dot(v, v), None), x, V
             )[0]
 
         def inverse(self, params, y):
