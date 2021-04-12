@@ -229,15 +229,21 @@ def _params_prior_loglik(params):
     # uninformative gamma prior on tau
     tau = params["precision"][0]
     ll = jax.scipy.stats.gamma.logpdf(tau, a=0.001, scale=1 / 0.001)
-    ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 9999)
+    #ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 9999)
+    loc = params["grid"][0]
+    scale = (params["grid"][-1] - params["grid"][0])
+    ll += jax.scipy.stats.uniform.logpdf(params["grid"][1], loc=loc, scale=scale)
+    ll += jax.scipy.stats.beta.logpdf(params["s"], 2, 6).sum()
 
     # marginal priors
-    for k in ["R", "delta", "x1"]:
-        log_rate = jnp.log(params[k])
-        ll += _lognorm_logpdf(log_rate, mu=1.0, sigma=1.25).sum()
-        ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
-        m = len(log_rate)
-        ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
+    ll += jax.scipy.stats.gamma.logpdf(params["R"], 1.5).sum()
+    ll += jax.scipy.stats.gamma.logpdf(params["delta"], 4).sum()
+    # for k in ["R", "delta", "x1"]:
+    #     log_rate = jnp.log(params[k])
+    #     ll += _lognorm_logpdf(log_rate, mu=1.0, sigma=1.25).sum()
+    #     ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
+    #     m = len(log_rate)
+    #     ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
     #     # gmrf with precision tau
     #     for rate in bdsky_transform(params):
     #             m = len(rate)
@@ -255,6 +261,7 @@ def loglik(
     c: tuple[bool, bool, bool],
     dbg: bool = False,
     condition_on_survival: bool = True,
+    equidistant_intervals: bool = True,
 ):
     # params["x1"] = params["x1rh"][:1]
     # params["root_height"] = params["x1rh"][1:]
@@ -284,10 +291,16 @@ def loglik(
     branch_lengths = node_heights[tr_d.child_parent[:-1]] - node_heights[:-1]
 
     # likelihood of tree under bdsky prior
-    # create time points: grid of m equispaced intervals
-    m = len(params["R"])
-    tm = root_height + params["x1"][0]
-    times = jnp.linspace(0, tm, m + 1)
+    # create time points: grid of m equispaced intervals or prespecified grid
+
+    tm = root_height + tr_d.sample_times.max() + params["x1"][0]
+
+    if equidistant_intervals:
+        m = len(params["R"])
+        times = jnp.linspace(0, tm, m + 1)
+    else:
+        times = params["grid"]
+        
     # times = id_print(times)
     xs = tm - node_heights
     if c[1]:

@@ -379,8 +379,20 @@ def Householder(rank: int = 1) -> Type[Transformation]:
 
 
 def Bounded(low, high) -> Transform:
-    return Compose(
-        ZeroOne,
-        lambda dim: Scale(dim=dim, c=jnp.log(high - low)),
-        lambda dim: Shift(dim=dim, c=low),
-    )
+    class Bdd(Transformation):
+        @property
+        def params(self):
+            return {}
+
+        def direct(self, params, x):
+            return jnp.clip(expit(x), 1e-7, 1 - 1e-7) * (high - low) + low
+
+        def log_det_jac(self, params, x):
+            return (jnp.log(expit(x)) + jnp.log1p(-expit(x)) + jnp.log(high-low)).sum()
+
+        def inverse(self, params, y):
+            z = (y - low) / (high - low)
+            zc = jnp.clip(z, 1e-7, 1 - 1e-7)
+            return logit(zc)
+
+    return Bdd

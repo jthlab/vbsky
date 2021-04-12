@@ -41,6 +41,7 @@ def loss(
     c: tuple[bool, bool, bool],
     M: int,
     dbg: bool,
+    equidistant_intervals: bool
 ):
     # approximate the loglik by monte carlo
     samples = {}
@@ -63,12 +64,13 @@ def loss(
         samples = id_print(samples, what="samples")
 
     elbo2 = jnp.mean(
-        vmap(loglik, (0,) + (None,) * 6)(
-            unpack(samples), tree_data, tip_data, Q, c, dbg, True
+        vmap(loglik, (0,) + (None,) * 7)(
+            unpack(samples), tree_data, tip_data, Q, c, dbg, True, equidistant_intervals
         )
     )
     if dbg:
         elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
+    #elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
     return -(elbo1 + elbo2)
 
 
