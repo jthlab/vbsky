@@ -47,7 +47,6 @@ class TreeData(NamedTuple):
     def internal_nodes(self):
         return np.arange(self.n, self.N)
 
-    @property
     def root(self):
         return self.preorder[0]
 
