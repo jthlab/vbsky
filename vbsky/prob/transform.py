@@ -156,7 +156,9 @@ class DiagonalAffine(Transformation):
 
 
 @dataclass
-class Positive(Transformation):
+class Exp(Transformation):
+    "x -> exp(x)"
+
     @property
     def params(self) -> dict:
         return {}
@@ -165,14 +167,31 @@ class Positive(Transformation):
         return jnp.exp(x)
 
     def log_det_jac(self, params, x):
-        # log|det(J)| = log|exp(x.sum())|
         return jnp.sum(x)
 
     def inverse(self, params, y):
         return jnp.log(y)
 
 
-Exp = Positive
+@dataclass
+class Softplus(Transformation):
+    "x -> log(1 + exp(x))"
+
+    @property
+    def params(self) -> dict:
+        return {}
+
+    def direct(self, params, x):
+        return jax.nn.softplus(x)
+
+    def log_det_jac(self, params, x):
+        return (x - self.direct(params, x)).sum()
+
+    def inverse(self, params, y):
+        return jnp.where(y > 10, y, jnp.log(jnp.expm1(y)))
+
+
+Positive = Softplus
 
 
 @dataclass
@@ -356,22 +375,37 @@ def Compose(*args: Type[Transformation]) -> Type[Transformation]:
 
 
 def Householder(rank: int = 1) -> Type[Transformation]:
+    from jax.experimental import stax
+    from jax.experimental.stax import Dense, BatchNorm, Relu
+
     class HH(Transformation):
+        r: int = rank
+
+        def __post_init(self):
+            init_fun, self._nn = stax.serial(
+                Dense(4 * self.dim), BatchNorm(), Relu, Dense(2 * self.dim)
+            )
+            rng = jax.random.PRNGKey(0)
+            in_shape = (-1, self.dim)
+            out_shape, self._nn_params = init_fun(rng, in_shape)
+
         @property
         def params(self):
-            return {"v": jnp.ones(self.dim)}
+            return {"nn": self._nn_params, "V": jnp.ones((self.r, self.dim))}
 
         def direct(self, params, x):
-            v = params["v"]
-            return x - 2 * v * jnp.dot(x, v) / jnp.dot(v, v)
+            V = params["V"]
+            return jax.lax.scan(
+                lambda y, v: (y - 2 * v * jnp.dot(y, v) / jnp.dot(v, v), None), z0, V
+            )[0]
 
         def inverse(self, params, y):
-            return self.direct(params, y)
+            return self.direct({"V": params["V"][::-1]}, y)
 
         def log_det_jac(self, params, x):
             return 0.0
 
-    return Compose(*[HH for _ in range(rank)])
+    return HH
 
 
 def Bounded(low, high) -> Transform:

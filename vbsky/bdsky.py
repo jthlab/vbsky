@@ -55,7 +55,7 @@ def _tree_loglik(
         p_i = jnp.minimum(
             (d["lam"] + d["mu"] + d["psi"] - d["A"] * g) / (2 * d["lam"]), 1.0
         )
-        q = d["dt"] * (d["lam"] - d["mu"])
+        q = d["dt"] * jnp.minimum(d["lam"] - d["mu"], 0.0)
         logit_pi = jnp.where(
             jnp.isfinite(logit(p_i)),
             logit(p_i),
@@ -69,7 +69,7 @@ def _tree_loglik(
                     - (d["lam"] - jnp.exp(q) * d["mu"])
                     * (1.0 - pi1)
                     / (d["lam"] - d["mu"]),
-                    jnp.log(d["mu"] / (d["lam"] - d["mu"])),
+                    jnp.log(d["mu"] / abs(d["lam"] - d["mu"])),
                 ),
                 logit(p_i),
             ),
@@ -137,7 +137,7 @@ def _tree_loglik(
         Adt = A_i * (t - t_i)
         if dbg:
             Adt, B_i = id_print((Adt, B_i), what="Adt,B_i")
-        # return jnp.log(4) + Adt - 2 * jnp.log(abs(jnp.exp(Adt) * (1 - B_i) + (1 + B_i)))
+        return jnp.log(4) + Adt - 2 * jnp.log(abs(jnp.exp(Adt) * (1 - B_i) + (1 + B_i)))
         m1 = jnp.isclose(B_i, -1.0)
         safe = jnp.where(m1, 0.0, B_i)
         f = jnp.where(
@@ -170,10 +170,13 @@ def _tree_loglik(
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0)]")
     if condition_on_survival:
-        # l1_1 = jnp.where(logit_p1_0 > 10, -logit_p1_0, -jnp.log1p(jnp.exp(logit_p1_0)))
-        # l1_1, _ = id_print((l1_1, jnp.log1p(-p1_0)), what="l11")
-        l1_1 = jnp.log1p(-p1_0)
-        l1 -= l1_1
+        l1_0 = jnp.log1p(-p1_0)
+        l1_1 = jnp.where(logit_p1_0 > 10, -logit_p1_0, -jnp.log1p(jnp.exp(logit_p1_0)))
+        l1_2 = jnp.where(jnp.isfinite(l1_0), l1_0, l1_1)
+        if dbg:
+            l1_0, l1_1, l1_2 = id_print((l1_0, l1_1, l1_2), what="l1_0, l1_1, l1_2")
+        # l1_1 = jnp.log1p(-p1_0)
+        l1 -= l1_2
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0) / (1 - p_1(t_0))]")
     loglik = l1
@@ -235,9 +238,9 @@ def _params_prior_loglik(params):
     for k in ["R", "delta", "x1"]:
         log_rate = jnp.log(params[k])
         ll += _lognorm_logpdf(log_rate, mu=1.0, sigma=1.25).sum()
-        ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
-        m = len(log_rate)
-        ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
+        # ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
+        # m = len(log_rate)
+        # ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
     #     # gmrf with precision tau
     #     for rate in bdsky_transform(params):
     #             m = len(rate)

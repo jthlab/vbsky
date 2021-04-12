@@ -7,7 +7,7 @@ from jax import numpy as jnp
 from jax.experimental import stax
 from jax.experimental.stax import Relu
 
-from prob.transform import Transformation
+from vbsky.prob.transform import Transformation
 
 
 def get_masks(input_dim, hidden_dim, hidden_layers=1):
