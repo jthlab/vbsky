@@ -73,7 +73,6 @@ def loss(
         elbo2 += jnp.mean(s2)
     if dbg:
         elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
-    #elbo1, elbo2 = id_print((elbo1, elbo2), what="elbo")
     return -(elbo1 + elbo2)
 
 
