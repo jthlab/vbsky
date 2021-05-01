@@ -296,7 +296,7 @@ def Repeat(f: Distribution, out_dim: int):
         def params(self):
             return f.params
 
-        def sample(self, rng: jax.random.PRNGKey, params: T, n: int = 1) -> jnp.ndarray:
+        def sample(self, rng: jax.random.PRNGKey, params, n: int = 1) -> jnp.ndarray:
             s = f.sample(rng, params, n)  # [n, f.dim]
             return jnp.repeat(s, self.dim, axis=1)
 

@@ -77,13 +77,13 @@ def nn_from_masks(masks, rng, input_dim):
     return params, apply_fun
 
 
-def create_transform(hidden_layers=1, conditional_dim=None):
+def create_transform(hidden_layers=1, hidden_dim=64, conditional_dim=None):
 
     if conditional_dim is None:
 
         def masked_transform(rng, input_dim):
             masks = get_masks(
-                input_dim, hidden_dim=input_dim // 2, hidden_layers=hidden_layers
+                input_dim, hidden_dim=hidden_dim, hidden_layers=hidden_layers
             )
             return nn_from_masks(masks, rng, input_dim)
 
@@ -155,7 +155,7 @@ def IAF(transform, rng):
 
         def direct(self, params, u):
             _, apply_fun = transform(rng, self.dim)
-            log_weight, bias = apply_fun(params, u).split(2, axis=1)
+            log_weight, bias = apply_fun(params, u).split(2)
             x = u * jnp.exp(log_weight) + bias
             return x
 
