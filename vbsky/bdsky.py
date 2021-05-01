@@ -232,9 +232,9 @@ def _params_prior_loglik(params):
     # uninformative gamma prior on tau
     tau = params["precision"][0]
     ll = jax.scipy.stats.gamma.logpdf(tau, a=0.001, scale=1 / 0.001)
-    #ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 9999)
+    # ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 9999)
     loc = params["grid"][0]
-    scale = (params["grid"][-1] - params["grid"][0])
+    scale = params["grid"][-1] - params["grid"][0]
     ll += jax.scipy.stats.uniform.logpdf(params["grid"][1], loc=loc, scale=scale)
     ll += jax.scipy.stats.beta.logpdf(params["s"], 2, 6).sum()
 
@@ -303,7 +303,7 @@ def loglik(
         times = jnp.linspace(0, tm, m + 1)
     else:
         times = params["grid"]
-        
+
     # times = id_print(times)
     xs = tm - node_heights
     if c[1]:
