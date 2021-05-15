@@ -3,10 +3,12 @@ import itertools
 from dataclasses import dataclass
 from io import StringIO
 from typing import Dict, NamedTuple, Tuple, Union
+from collections.abc import Sequence
 
 import jax
 import networkx as nx
 import numpy as np
+from numpy.distutils.misc_util import is_sequence
 import tskit
 from jax import numpy as jnp
 from jax.tree_util import register_pytree_node_class
@@ -148,7 +150,8 @@ class TreeData(NamedTuple):
         newick: str,
         return_node_mapping: bool = True,
         return_branch_lengths: bool = False,
-        return_root_edge: bool = False
+        return_root_edge: bool = False,
+        outgroup: Union[str, Sequence[str]] = None
     ) -> Union[Tuple["TreeData", dict], Tuple["TreeData", dict, np.ndarray], Tuple["TreeData", dict, np.ndarray, np.ndarray]]:
         """Construct tree data from a Newick tree. Assumes only leaf nodes are named.
 
@@ -182,6 +185,12 @@ class TreeData(NamedTuple):
         from Bio import Phylo
 
         tree = Phylo.read(StringIO(newick), "newick", rooted=True)
+        if outgroup is not None:
+            if is_sequence(outgroup):
+                for o in outgroup:
+                    tree.prune(target=o)
+            else:
+                tree.prune(target=outgroup)
         G = Phylo.to_networkx(tree)
 
         # Clades aren't sortable which causes problems with JAX, so relabel them with text strings.

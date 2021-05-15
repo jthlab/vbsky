@@ -1,8 +1,9 @@
-from typing import Tuple
+from collections.abc import Callable
+from typing import Tuple, Union
 
 import jax
 import jax.numpy as jnp
-from jax import vmap
+from jax import vmap, jit
 from jax.experimental.host_callback import id_print
 from jax.scipy.special import xlog1py, xlogy, logit, expit
 
@@ -10,6 +11,8 @@ from . import prune
 from .substitution import SubstitutionModel
 from .tree_data import TreeData
 from .util import TipData, order_events
+
+from functools import partial
 
 
 def _tree_loglik(
@@ -227,56 +230,58 @@ def _lognorm_logpdf(log_x, mu, sigma):
     return jax.scipy.stats.norm.logpdf((log_x - mu) / sigma) - log_x
 
 
-def _params_prior_loglik(params):
-    # TODO move this
-    # uninformative gamma prior on tau
-    tau = params["precision"][0]
-    ll = jax.scipy.stats.gamma.logpdf(tau, a=0.001, scale=1 / 0.001)
+# def _params_prior_loglik(params):
+#     # TODO move this
+#     # uninformative gamma prior on tau
+#     tau = params["precision"][0]
+#     ll = jax.scipy.stats.gamma.logpdf(tau, a=0.001, scale=1 / 0.001)
 
-    # loc = params["grid"][0]
-    # scale = (params["grid"][-1] - params["grid"][0])
-    # ll += jax.scipy.stats.uniform.logpdf(params["grid"][1], loc=loc, scale=scale)
-    # ll += jax.scipy.stats.beta.logpdf(params["s"], 1, 9).sum()
-    # ll += jax.scipy.stats.gamma.logpdf(params["R"], 1.5).sum()
-    # ll += jax.scipy.stats.gamma.logpdf(params["delta"], 4).sum()
+#     # loc = params["grid"][0]
+#     # scale = (params["grid"][-1] - params["grid"][0])
+#     # ll += jax.scipy.stats.uniform.logpdf(params["grid"][1], loc=loc, scale=scale)
+#     # ll += jax.scipy.stats.beta.logpdf(params["s"], 1, 9).sum()
+#     # ll += jax.scipy.stats.gamma.logpdf(params["R"], 1.5).sum()
+#     # ll += jax.scipy.stats.gamma.logpdf(params["delta"], 4).sum()
 
-    ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 999)
+#     ll += jax.scipy.stats.beta.logpdf(params["rho"][-1], 1, 999)
 
-    # marginal priors
+#     # marginal priors
     
-    mus = [0, 3.8, -1.2]
-    sigmas = [1, 0.5, 0.05]
-    for i,k in enumerate(["R", "delta", "origin"]):
-        log_rate = jnp.log(params[k])
-        ll += _lognorm_logpdf(log_rate, mu=mus[i], sigma=sigmas[i]).sum()
-    #     ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
-    #     m = len(log_rate)
-    #     ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
-    #     # gmrf with precision tau
-    #     for rate in bdsky_transform(params):
-    #             m = len(rate)
-    #             ll -= (tau / 2) * (jnp.diff(jnp.log(1e-8 + rate)) ** 2).sum()
-    #             ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
-    #     gmrf_ll -= jnp.log(delta).sum() / 2  # missing from original skyride paper?
-    return ll
+#     mus = [0, 4.1, -1.2]
+#     sigmas = [1, 0.5, 0.05]
+#     for i,k in enumerate(["R", "delta", "origin"]):
+#         log_rate = jnp.log(params[k])
+#         ll += _lognorm_logpdf(log_rate, mu=mus[i], sigma=sigmas[i]).sum()
+#     #     ll -= (tau / 2) * (jnp.diff(log_rate) ** 2).sum()
+#     #     m = len(log_rate)
+#     #     ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
+#     #     # gmrf with precision tau
+#     #     for rate in bdsky_transform(params):
+#     #             m = len(rate)
+#     #             ll -= (tau / 2) * (jnp.diff(jnp.log(1e-8 + rate)) ** 2).sum()
+#     #             ll += xlogy((m - 1) / 2, tau / (2 * jnp.pi))
+#     #     gmrf_ll -= jnp.log(delta).sum() / 2  # missing from original skyride paper?
+#     return ll
 
 
 def loglik(
     params,
-    tr_d: TreeData,
-    tp_d: TipData,
+    tr_ds: Union[tuple[TreeData], TreeData],
+    tp_d: Union[tuple[TipData], TipData],
     Q: SubstitutionModel,
     c: tuple[bool, bool, bool],
     dbg: bool = False,
     condition_on_survival: bool = True,
     equidistant_intervals: bool = True,
+    _params_prior_loglik: Callable[..., float] = lambda x: 0.,
+    n_trees: int = 1
 ):
     # params["x1"] = params["x1rh"][:1]
     # params["root_height"] = params["x1rh"][1:]
     # There should be one proportion for each internal branch except the root.
-    assert len(params["proportions"]) == tr_d.n - 2
+    assert len(params["proportions0"]) == tr_ds[0].n - 2
     assert len(params["R"]) == len(params["s"]) == len(params["delta"])
-    assert params["root_proportion"].ndim == params["root_proportion"].size == 1
+    assert params["root_proportion0"].ndim == params["root_proportion0"].size == 1
 
     # transform to the bdsky model parameters
     loglik = 0.0
@@ -288,50 +293,55 @@ def loglik(
 
     # params["root_height"] = id_print(params["root_height"], what="root_height")
 
-    # Convert proportions and root height to internal node heights.
-    root_height = params["root_proportion"][0] * params["origin"][0]
-    node_heights = tr_d.height_transform(
-        root_height,
-        params["proportions"],
-    )
-
-    # Convert node heights to branch lengths
-    branch_lengths = node_heights[tr_d.child_parent[:-1]] - node_heights[:-1]
-
-    # likelihood of tree under bdsky prior
-    # create time points: grid of m equispaced intervals or prespecified grid
-
-    tm = params["origin"][0] + tr_d.sample_times.max()
-
-    if equidistant_intervals:
-        m = len(params["R"])
-        times = jnp.linspace(0, tm, m + 1)
-    else:
-        times = params["grid"]
-        end = jnp.where(tm < times[-1], times[-1], tm)
-        times = jax.ops.index_update(times, -1, end)
-        
-    # times = id_print(times)
-    xs = tm - node_heights
-    if c[1]:
-        tree_prior_ll = _tree_loglik(
-            lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
+    f_ll = 0.0
+    for i in range(n_trees):
+        tr_d = tr_ds[i]
+        # Convert proportions and root height to internal node heights.
+        root_height = params[f"root_proportion{i}"][0] * params["origin"][0]
+        node_heights = tr_d.height_transform(
+            root_height,
+            params[f"proportions{i}"],
         )
-        loglik += tree_prior_ll
 
-    # likelihood of data given tree: map across all columns of the alignment
-    # branch_lengths = id_print(branch_lengths, what="branch_lengths")
-    if c[2]:
-        data_ll = (
-            vmap(prune.prune_loglik, (None, None, 0, None, None, None))(
-                branch_lengths * params["clock_rate"][0],
-                Q,
-                tp_d.partials,
-                tr_d,
-                True,
-                dbg,
+        # Convert node heights to branch lengths
+        branch_lengths = node_heights[tr_d.child_parent[:-1]] - node_heights[:-1]
+
+        # likelihood of tree under bdsky prior
+        # create time points: grid of m equispaced intervals or prespecified grid
+
+        tm = params["origin"][0] + tr_d.sample_times.max()
+
+        if equidistant_intervals:
+            m = len(params["R"])
+            times = jnp.linspace(0, tm, m + 1)
+        else:
+            times = params["grid"]
+            times = jax.ops.index_update(times, -1, tm)
+            
+        # times = id_print(times)
+        xs = tm - node_heights
+        if c[1]:
+            tree_prior_ll = _tree_loglik(
+                lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
             )
-            * tp_d.counts
-        ).sum()
-        loglik += data_ll
+            f_ll += tree_prior_ll
+
+        # likelihood of data given tree: map across all columns of the alignment
+        # branch_lengths = id_print(branch_lengths, what="branch_lengths")
+        if c[2]:
+            data_ll = (
+                vmap(prune.prune_loglik, (None, None, 0, None, None, None))(
+                    branch_lengths * params["clock_rate"][0],
+                    Q,
+                    tp_d[i].partials,
+                    tr_d,
+                    True,
+                    dbg,
+                )
+                * tp_d[i].counts
+            ).sum()
+            f_ll += data_ll
+
+    loglik += f_ll
+
     return loglik
