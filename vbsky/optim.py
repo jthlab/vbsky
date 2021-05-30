@@ -35,15 +35,14 @@ def unpack(samples):
 def loss(
     params: dict[str, Any],
     flows: VF,
-    tree_data: tuple[TreeData],
-    tip_data: tuple[TipData],
+    tree_data: TreeData,
+    tip_data: TipData,
     rng: jax.random.PRNGKey,
     Q: SubstitutionModel,
     c: tuple[tuple[bool, bool], tuple[bool, bool, bool]],
     dbg: bool,
     equidistant_intervals: bool,
     _params_prior_loglik: Callable[..., float],
-    n_trees: int
 ):
     # approximate the loglik by monte carlo
     c1, c2 = c
@@ -70,8 +69,8 @@ def loss(
 
     elbo2 = 0.0
     if c1[1]:
-        s2 = vmap(loglik, (0,) + (None,) * 9)(
-            unpack(samples), tree_data, tip_data, Q, c2, dbg, True, equidistant_intervals, _params_prior_loglik, n_trees
+        s2 = vmap(loglik, (0,) + (None,) * 8)(
+            unpack(samples), tree_data, tip_data, Q, c2, dbg, True, equidistant_intervals, _params_prior_loglik
         )
         elbo2 += jnp.mean(s2)
     if dbg:

@@ -266,22 +266,21 @@ def _lognorm_logpdf(log_x, mu, sigma):
 
 def loglik(
     params,
-    tr_ds: Union[tuple[TreeData], TreeData],
-    tp_d: Union[tuple[TipData], TipData],
+    tr_d: TreeData,
+    tp_d: TipData,
     Q: SubstitutionModel,
     c: tuple[bool, bool, bool],
     dbg: bool = False,
     condition_on_survival: bool = True,
     equidistant_intervals: bool = True,
     _params_prior_loglik: Callable[..., float] = lambda x: 0.,
-    n_trees: int = 1
 ):
     # params["x1"] = params["x1rh"][:1]
     # params["root_height"] = params["x1rh"][1:]
     # There should be one proportion for each internal branch except the root.
-    assert len(params["proportions0"]) == tr_ds[0].n - 2
+    assert len(params["proportions"]) == tr_d.n - 2
     assert len(params["R"]) == len(params["s"]) == len(params["delta"])
-    assert params["root_proportion0"].ndim == params["root_proportion0"].size == 1
+    assert params["root_proportion"].ndim == params["root_proportion"].size == 1
 
     # transform to the bdsky model parameters
     loglik = 0.0
@@ -293,55 +292,51 @@ def loglik(
 
     # params["root_height"] = id_print(params["root_height"], what="root_height")
 
-    f_ll = 0.0
-    for i in range(n_trees):
-        tr_d = tr_ds[i]
-        # Convert proportions and root height to internal node heights.
-        root_height = params[f"root_proportion{i}"][0] * params["origin"][0]
-        node_heights = tr_d.height_transform(
-            root_height,
-            params[f"proportions{i}"],
+    # Convert proportions and root height to internal node heights.
+    root_height = params["root_proportion"][0] * (params["origin"][0] + params["origin_start"][0] - tr_d.sample_times.max())
+    node_heights = tr_d.height_transform(
+        root_height,
+        params["proportions"],
+    )
+
+    # Convert node heights to branch lengths
+    branch_lengths = node_heights[tr_d.child_parent[:-1]] - node_heights[:-1]
+
+    # likelihood of tree under bdsky prior
+    # create time points: grid of m equispaced intervals or prespecified grid
+
+    tm = params["origin"][0] + params["origin_start"][0]
+
+    if equidistant_intervals:
+        m = len(params["R"])
+        times = jnp.linspace(0, tm, m + 1)
+    else:
+        times = params["grid"]
+        times = jax.ops.index_update(times, -1, tm)
+        
+    # times = id_print(times)
+    xs = tm - node_heights
+    if c[1]:
+        tree_prior_ll = _tree_loglik(
+            lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
         )
+    loglik += tree_prior_ll
 
-        # Convert node heights to branch lengths
-        branch_lengths = node_heights[tr_d.child_parent[:-1]] - node_heights[:-1]
-
-        # likelihood of tree under bdsky prior
-        # create time points: grid of m equispaced intervals or prespecified grid
-
-        tm = params["origin"][0] + tr_d.sample_times.max()
-
-        if equidistant_intervals:
-            m = len(params["R"])
-            times = jnp.linspace(0, tm, m + 1)
-        else:
-            times = params["grid"]
-            times = jax.ops.index_update(times, -1, tm)
-            
-        # times = id_print(times)
-        xs = tm - node_heights
-        if c[1]:
-            tree_prior_ll = _tree_loglik(
-                lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
+    # likelihood of data given tree: map across all columns of the alignment
+    # branch_lengths = id_print(branch_lengths, what="branch_lengths")
+    if c[2]:
+        data_ll = (
+            vmap(prune.prune_loglik, (None, None, 0, None, None, None))(
+                branch_lengths * params["clock_rate"][0],
+                Q,
+                tp_d.partials,
+                tr_d,
+                True,
+                dbg,
             )
-            f_ll += tree_prior_ll
+            * tp_d.counts
+        ).sum()
 
-        # likelihood of data given tree: map across all columns of the alignment
-        # branch_lengths = id_print(branch_lengths, what="branch_lengths")
-        if c[2]:
-            data_ll = (
-                vmap(prune.prune_loglik, (None, None, 0, None, None, None))(
-                    branch_lengths * params["clock_rate"][0],
-                    Q,
-                    tp_d[i].partials,
-                    tr_d,
-                    True,
-                    dbg,
-                )
-                * tp_d[i].counts
-            ).sum()
-            f_ll += data_ll
-
-    loglik += f_ll
+    loglik += data_ll
 
     return loglik
