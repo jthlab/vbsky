@@ -14,7 +14,6 @@ class TipData(NamedTuple):
     partials: np.ndarray
     counts: np.ndarray
 
-
 def jaxify_args(f):
     @functools.wraps(f)
     def _f(*args):
