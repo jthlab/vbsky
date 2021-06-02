@@ -227,7 +227,7 @@ def _bdsky_transform(params):
 
 
 def _lognorm_logpdf(log_x, mu, sigma):
-    return jax.scipy.stats.norm.logpdf((log_x - mu) / sigma) - log_x
+    return jax.scipy.stats.norm.logpdf((log_x - mu) / sigma) - log_x - jnp.log(sigma)
 
 
 # def _params_prior_loglik(params):
@@ -311,8 +311,8 @@ def loglik(
         m = len(params["R"])
         times = jnp.linspace(0, tm, m + 1)
     else:
-        times = params["grid"]
-        times = jax.ops.index_update(times, -1, tm)
+        times = tm - params["grid"]
+        times = jax.ops.index_update(times, 0, 0)
         
     # times = id_print(times)
     xs = tm - node_heights

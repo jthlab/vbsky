@@ -21,9 +21,15 @@ def get_distance_matrix(aln, times, single_theta=False):
     nc2 = int(n * (n-1) / 2)
 
     r, c = np.tril_indices(len(aln), -1)
-    aln = np.array(aln)
-    pw_dist = aln[r] != aln[c]
-    y = pw_dist.sum(axis=1) / len(aln[0])
+    np_aln = np.array(aln)
+    pw_dist = (
+        (np_aln[r] != np_aln[c])
+        * (np_aln[r] != "-")
+        * (np_aln[c] != "-")
+        * (np_aln[r] != "N")
+        * (np_aln[c] != "N")
+    )
+    y = pw_dist.sum(axis=1) / len(np_aln[0])
 
     dt = np.abs(times[:,None] - times)[(r,c)]
     
