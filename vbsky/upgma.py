@@ -8,7 +8,21 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio.Align import MultipleSeqAlignment
 
-def get_distance_matrix(aln, times, single_theta=False):
+from tqdm import tqdm
+
+def get_hamming_dist(aln):
+    r, c = np.tril_indices(len(aln), -1)
+    np_aln = np.array(aln)
+    pw_dist = (
+        (np_aln[r] != np_aln[c])
+        * (np_aln[r] != "-")
+        * (np_aln[c] != "-")
+        * (np_aln[r] != "N")
+        * (np_aln[c] != "N")
+    )
+    return pw_dist.sum(axis=1) / len(aln[0])
+
+def get_distance_matrix(pw_dist, names, times, single_theta=False):
     """
     Get DistanceMatrix object from alignment and sample times
 
@@ -16,14 +30,11 @@ def get_distance_matrix(aln, times, single_theta=False):
         See Step 1 of Drummond and Rodrigo (2000)
     """
 
-    names = [s.name for s in aln]
-    n = len(aln)
+    n = len(names)
     nc2 = int(n * (n-1) / 2)
 
-    r, c = np.tril_indices(len(aln), -1)
-    aln = np.array(aln)
-    pw_dist = aln[r] != aln[c]
-    y = pw_dist.sum(axis=1) / len(aln[0])
+    r, c = np.tril_indices(n, -1)
+    y = pw_dist
 
     dt = np.abs(times[:,None] - times)[(r,c)]
     
@@ -77,7 +88,7 @@ def supgma_subsample(aln, times_dict, single_theta=False, n_tips=50, n_trees=5):
     alns = []
     trees = []
 
-    for i in range(n_trees):
+    for i in tqdm(range(n_trees)):
         print(i)
         inds = np.random.choice(len(aln._records), size=n_tips, replace=False)
         aln_sample = MultipleSeqAlignment([aln[int(inds[0])]])
