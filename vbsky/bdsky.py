@@ -151,7 +151,7 @@ def _tree_loglik(
     # number of degree-2 vertices at times -- by construction, no d2 vertices at t_M. also, add one to lineage counts
     # because there is a branch extending up from the root to time t0.
     n_i = jnp.append(
-        1 + ev[jnp.searchsorted(ev[:, 0], times[1:-1], side="left"), 1], 0.0
+        2 + ev[jnp.searchsorted(ev[:, 0], times[1:-1], side="left"), 1], 0.0
     )  # times[1], ..., times[m]
 
     # number of deterministic samples at each time point
