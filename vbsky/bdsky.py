@@ -96,6 +96,9 @@ def _tree_loglik(
         # )
         return (p_i, logit_pi), B_i
 
+    # 1-p1_0 is the probability that the initial carrier has >0 sampled lineages. this probability is lower bounded
+    # by the probability that the first event is a birth instead of death: 1-p1_0 >= lam/(lam+mu)
+
     dt = jnp.diff(times)
     A = jnp.sqrt((lam - mu - psi) ** 2 + (4 * lam * psi))
     if dbg:
@@ -151,7 +154,7 @@ def _tree_loglik(
     # number of degree-2 vertices at times -- by construction, no d2 vertices at t_M. also, add one to lineage counts
     # because there is a branch extending up from the root to time t0.
     n_i = jnp.append(
-        2 + ev[jnp.searchsorted(ev[:, 0], times[1:-1], side="left"), 1], 0.0
+        1 + ev[jnp.searchsorted(ev[:, 0], times[1:-1], side="left"), 1], 0.0
     )  # times[1], ..., times[m]
 
     # number of deterministic samples at each time point
@@ -170,14 +173,14 @@ def _tree_loglik(
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0)]")
     if condition_on_survival:
-        l1 = 2 * jnp.log1p(-p1_0)
-        # l1_0 = jnp.log1p(-p1_0)
-        # l1_1 = jnp.where(logit_p1_0 > 10, -logit_p1_0, -jnp.log1p(jnp.exp(logit_p1_0)))
-        # l1_2 = jnp.where(jnp.isfinite(l1_0), l1_0, l1_1)
-        # if dbg:
-        #     l1_0, l1_1, l1_2 = id_print((l1_0, l1_1, l1_2), what="l1_0, l1_1, l1_2")
-        # # l1_1 = jnp.log1p(-p1_0)
-        # l1 -= l1_2
+        # l1 = 2 * jnp.log1p(-p1_0)
+        l1_0 = jnp.log1p(-p1_0)
+        l1_1 = jnp.where(logit_p1_0 > 10, -logit_p1_0, -jnp.log1p(jnp.exp(logit_p1_0)))
+        l1_2 = jnp.where(jnp.isfinite(l1_0), l1_0, l1_1)
+        if dbg:
+            l1_0, l1_1, l1_2 = id_print((l1_0, l1_1, l1_2), what="l1_0, l1_1, l1_2")
+        # l1_1 = jnp.log1p(-p1_0)
+        l1 -= l1_2
     if dbg:
         l1 = id_print(l1, what="log[q_1(t_0) / (1 - p_1(t_0))]")
     loglik = l1
@@ -291,7 +294,8 @@ def loglik(
     # params["root_height"] = id_print(params["root_height"], what="root_height")
 
     # Convert proportions and root height to internal node heights.
-    root_height = 1.0 * (  # params["root_proportion"][0] * (
+    #root_height = 1.0 * (  
+    root_height = params["root_proportion"][0] * (
         params["origin"][0] + params["origin_start"][0] - tr_d.sample_times.max()
     )
     node_heights = tr_d.height_transform(
@@ -319,7 +323,7 @@ def loglik(
         tree_prior_ll = _tree_loglik(
             lam, psi, mu, rho, xs, times, tr_d, dbg, condition_on_survival
         )
-    loglik += tree_prior_ll
+        loglik += tree_prior_ll
 
     # likelihood of data given tree: map across all columns of the alignment
     # branch_lengths = id_print(branch_lengths, what="branch_lengths")
@@ -335,7 +339,6 @@ def loglik(
             )
             * tp_d.counts
         ).sum()
-
-    loglik += data_ll
+        loglik += data_ll
 
     return loglik
