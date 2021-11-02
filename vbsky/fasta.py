@@ -1,5 +1,6 @@
 import dataclasses
 import itertools
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from io import StringIO
 from typing import Dict, NamedTuple, Tuple, Union
@@ -152,6 +153,8 @@ class SeqData:
         if stratified:
             key_list = list(self.sample_months.keys())
 
+        p = ProcessPoolExecutor()
+        futs = []
         for i in tqdm(range(n_trees)):
             if stratified:
                 seqs = np.random.choice(self.sample_months[key_list[i%len(key_list)]], size=n_tips, replace=False)
@@ -172,10 +175,10 @@ class SeqData:
             times_sample = np.array([self.sample_times[name] for name in names])
 
             if audacity:
-                tree = Tree(audacity_tree_path, format=1)
-                tree.prune(names, preserve_branch_length=True)
+                futs.append(p.submit(_prune_tree, audacity_tree_path, names))
 
             else:
+                # fixme doesn't parallelize over this currently
                 snp_dists = sh.Command("snp-dists")
                 try:
                     with open(f"{temp_folder}/tab.tsv", "w") as tsv:
@@ -192,46 +195,32 @@ class SeqData:
                     pw_dist, names, times_sample, single_theta
                 )
                 tree = constructor.upgma(dm)
-            self.trees.append(tree)
+                self.trees.append(tree)
+
             self.alns.append(aln_sample)
 
+        if futs:
+            print("Processing audacity trees")
+            for f in tqdm(futs):
+                tree = f.result()
+                self.trees.append(tree)
+
         if audacity:
+            print("Writing audacity pruned trees")
             with open(tree_path, "w") as file:
                 for tree in self.trees:
                     file.write(tree.write() + "\n")
         else:
+            print("Writing phylo trees")
             Phylo.write(self.trees, self.tree_path, "newick")
 
-    def process_tree(self, line):
-        td, node_mapping = TreeData.from_newick(
-            line.strip(), return_node_mapping=True
-        )
-        reverse_node_mapping = dict(map(reversed, node_mapping.items()))
-        td.sample_times[:] = [
-            self.sample_times[reverse_node_mapping[i]] for i in range(td.n)
-        ]
-        return td, node_mapping
-
     def process_trees(self):
-
-        p = mp.Pool(n_processes)
-        _iter = [line for line in open(self.tree_path, "rt")]
-        res = list(tqdm(p.imap(self.process_tree, _iter), total=len(_iter)))
-        p.terminate()
+        print("Processing trees")
+        with ProcessPoolExecutor() as p:
+            futs = [p.submit(_process_tree, line, self.sample_times) for line in open(self.tree_path, "rt")]
+            res = [f.result() for f in tqdm(futs)]
         self.tds = [r[0] for r in res]
         self.node_mappings = [r[1] for r in res]
-
-    def _process_tips(self, i):
-        msa = self.alns[i]
-        sids, seqs = zip(*[(s.name, str(s.seq)) for s in msa])
-        tip_partials0 = np.array([encode_partials(seq) for seq in seqs]).transpose(
-            [1, 0, 2]
-        )
-        perm = np.argsort([self.node_mappings[i][s] for s in sids])
-        tip_partials = tip_partials0[:, perm]
-        tip_data_c = TipData(*np.unique(tip_partials, axis=0, return_counts=True))
-        return tip_data_c, tip_data_c.partials.shape[0]
-
 
     def process_tips(self):
         self.tip_data_cs = []
@@ -239,10 +228,9 @@ class SeqData:
 
         print("Readying tip data")
         # Add parallelization
-        n_iter = len(self.alns)
-        p = mp.Pool(n_processes)
-        res = list(tqdm(p.imap(self._process_tips, range(n_iter)), total=n_iter))
-        p.terminate()
+        with ProcessPoolExecutor() as p:
+            futs = [p.submit(_process_tips, aln, nm) for aln, nm in zip(self.alns, self.node_mappings)]
+            res = [f.result() for f in tqdm(futs)]
         self.tip_data_cs = [r[0] for r in res]
         self.max_partial_count = np.max([r[1] for r in res])
 
@@ -421,3 +409,28 @@ class SeqData:
             local_posteriors.append(lp)
 
         return ret(global_posteriors, local_posteriors, fs)
+
+def _prune_tree(audacity_tree_path, names):
+    tree = Tree(audacity_tree_path, format=1)
+    tree.prune(names, preserve_branch_length=True)
+    return tree
+
+def _process_tree(line, sample_times):
+    td, node_mapping = TreeData.from_newick(
+        line.strip(), return_node_mapping=True
+    )
+    reverse_node_mapping = dict(map(reversed, node_mapping.items()))
+    td.sample_times[:] = [
+        sample_times[reverse_node_mapping[i]] for i in range(td.n)
+    ]
+    return td, node_mapping
+
+def _process_tips(msa, node_mapping):
+    sids, seqs = zip(*[(s.name, str(s.seq)) for s in msa])
+    tip_partials0 = np.array([encode_partials(seq) for seq in seqs]).transpose(
+        [1, 0, 2]
+    )
+    perm = np.argsort([node_mapping[s] for s in sids])
+    tip_partials = tip_partials0[:, perm]
+    tip_data_c = TipData(*np.unique(tip_partials, axis=0, return_counts=True))
+    return tip_data_c, tip_data_c.partials.shape[0]
