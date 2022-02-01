@@ -10,6 +10,7 @@ import sh
 
 import jax.numpy as jnp
 import numpy as np
+from numpy import linalg as la
 
 from functools import partial
 
@@ -76,48 +77,86 @@ def _loss(p, *args):
     f2 = ravel_pytree(p)[0]
     return f1  # + jnp.dot(f2, f2)
 
+def get_gisaid_dates(aln):
+    dates = []
+    for s in aln:
+        desc = s.description.split("|")
+        date = desc[2]
+
+        if date[-5:-3] == "00":
+            continue
+
+        if date[-2:] == "00":
+            date = date.replace("-00", "-15")
+        date = datetime.strptime(date, "%Y-%m-%d")
+        delta = timedelta(days=2 - date.weekday())
+        date += delta
+        dates.append(date)
+    return dates
+
+def get_gisaid_names(aln):
+    names = []
+    for s in aln:
+        desc = s.description.split("|")
+        names.append(desc[1])
+    return names
+
 class SeqData:
     def __init__(
-        self, aln, left_end=datetime(MINYEAR, 1, 1), right_end=datetime.today()
+        self, aln, names=None, dates=None, left_end=datetime(MINYEAR, 1, 1), right_end=datetime.today(),
     ):
         self.sids = []
+        self.sids_dict = {}
         self.seqs = {}
         self.dates = []
 
-        self.max_date = datetime(MINYEAR, 1, 1)
-        self.min_date = datetime.today()
+        if names is None:
+            names = get_gisaid_names(aln)
+        if dates is None:
+            dates = get_gisaid_dates(aln)
+        
+        self.date_float = isinstance(dates[0], float)
 
-        for s in aln:
-            desc = s.description.split("|")
-            s.name = desc[1]
-            date = desc[2]
+        if self.date_float:
+            self.max_date = 0
+            self.min_date = float("inf")
+            if isinstance(left_end, datetime):
+                left_end = 0
+            if isinstance(right_end, datetime):
+                right_end = float("inf")
 
-            if date[-5:-3] == "00":
-                continue
+        else:
+            self.max_date = datetime(MINYEAR, 1, 1)
+            self.min_date = datetime.today()
 
-            if date[-2:] == "00":
-                date = date.replace("-00", "-15")
-            date = datetime.strptime(date, "%Y-%m-%d")
+        for s, name, date in zip(aln, names, dates):
 
             if date >= left_end and date <= right_end:
-                self.sids.append(s.name)
-                delta = timedelta(days=2 - date.weekday())
-                date += delta
+                self.sids.append(name)
                 self.dates.append(date)
                 if self.max_date < self.dates[-1]:
                     self.max_date = self.dates[-1]
                 if self.min_date > self.dates[-1]:
                     self.min_date = self.dates[-1]
-                self.seqs[s.name] = s 
+                self.seqs[name] = s 
+                self.sids_dict[s.description] = name
 
         self.sample_times = {}
         self.sample_months = defaultdict(list)
-        for s, d in zip(self.sids, self.dates):
-            days = (self.max_date - d).days
-            self.sample_times[s] = days / days_in_year
-            self.sample_months[(d.year, (d.month-1) // 3)].append(s)
 
-        self.earliest = (self.max_date - self.min_date).days / days_in_year
+        if self.date_float:
+            #fixme no default option for stratify when dates are floats
+            for s, d in zip(self.sids, self.dates):
+                self.sample_times[s] = self.max_date - d
+            self.earliest = self.max_date - self.min_date
+
+        else:
+            for s, d in zip(self.sids, self.dates):
+                days = (self.max_date - d).days
+                self.sample_times[s] = days / days_in_year
+                self.sample_months[(d.year, d.month)].append(s)
+
+            self.earliest = (self.max_date - self.min_date).days / days_in_year
         self.aln = MultipleSeqAlignment(list(self.seqs.values()))
 
     @property
@@ -126,8 +165,14 @@ class SeqData:
 
     @property
     def end(self):
-        year_start = datetime(2021, 1, 1)
-        end = 2021 + (self.max_date - year_start).days / 365.245
+        if self.date_float:
+            end = self.max_date
+
+        else:
+            year = self.max_date.year
+            year_start = datetime(year, 1, 1)
+            end = year + (self.max_date - year_start).days / days_in_year
+
         return end
 
     def sample_trees(
@@ -139,7 +184,8 @@ class SeqData:
         single_theta=False,
         audacity=False,
         audacity_tree_path="",
-        stratified=False
+        stratified=False,
+        stratify_by=None
     ):
         r, c = np.tril_indices(n_tips, -1)
         constructor = DistanceTreeConstructor()
@@ -151,27 +197,30 @@ class SeqData:
         print("Readying trees")
 
         if stratified:
-            key_list = list(self.sample_months.keys())
+            if stratify_by is None:
+                stratify_by = self.sample_months
+            key_list = [k for k,v in stratify_by.items() if len(v) > 50]
 
         p = ProcessPoolExecutor()
         futs = []
         for i in tqdm(range(n_trees)):
             if stratified:
-                seqs = np.random.choice(self.sample_months[key_list[i%len(key_list)]], size=n_tips, replace=False)
-                aln_sample = MultipleSeqAlignment([self.seqs[s] for s in seqs])
+                sequence_pool = stratify_by[key_list[i%len(key_list)]]
+                try:
+                    names = np.random.choice(sequence_pool, size=n_tips, replace=False).tolist()
+                except:
+                    names = sequence_pool
 
             else:
-                inds = np.random.choice(len(self.aln._records), size=n_tips, replace=False)
-                aln_sample = MultipleSeqAlignment([self.aln[int(inds[0])]])
-                for j in range(1, n_tips):
-                    aln_sample.append(self.aln[int(inds[j])])
+                names = np.random.choice(self.sids, size=n_tips, replace=False).tolist()
+            
+            aln_sample = MultipleSeqAlignment([self.seqs[s] for s in names])
 
             AlignIO.write(
                 aln_sample,
                 f"{temp_folder}/temp.fa",
                 "fasta",
             )
-            names = [s.name for s in aln_sample]
             times_sample = np.array([self.sample_times[name] for name in names])
 
             if audacity:
@@ -229,7 +278,7 @@ class SeqData:
         print("Readying tip data")
         # Add parallelization
         with ProcessPoolExecutor() as p:
-            futs = [p.submit(_process_tips, aln, nm) for aln, nm in zip(self.alns, self.node_mappings)]
+            futs = [p.submit(_process_tips, aln, nm, self.sids_dict) for aln, nm in zip(self.alns, self.node_mappings)]
             res = [f.result() for f in tqdm(futs)]
         self.tip_data_cs = [r[0] for r in res]
         self.max_partial_count = np.max([r[1] for r in res])
@@ -251,7 +300,8 @@ class SeqData:
         single_theta=False,
         audacity=False,
         audacity_tree_path="",
-        stratified=False
+        stratified=False,
+        stratify_by=None
     ):
         self.sample_trees(
             n_tips,
@@ -261,7 +311,8 @@ class SeqData:
             single_theta,
             audacity,
             audacity_tree_path,
-            stratified
+            stratified,
+            stratify_by
         )
         self.process_trees()
         self.process_tips()
@@ -292,7 +343,7 @@ class SeqData:
                 for td in self.tds
             ]
 
-    def loop(self, _params_prior_loglik, rng, n_iter=10, step_size=1.0, Q=HKY(2.7)):
+    def loop(self, _params_prior_loglik, rng, n_iter=10, step_size=1.0, Q=HKY(2.7), threshold=0.01):
         opt_init, opt_update, get_params = optimizers.adagrad(step_size=step_size)
 
         @partial(jit, static_argnums=(5, 6))
@@ -359,26 +410,45 @@ class SeqData:
         fs = [[] for _ in range(n_trees)]
         gs = [[] for _ in range(n_trees)]
 
-        for i in tqdm(range(n_iter)):
-            for j, (td, tip_data_c) in enumerate(zip(self.tds, self.tip_data_cs)):
-                self.flows = self.global_flows | self.local_flows[j]
-                f, g, opt_state1, local_opt_state1, rng1 = step(
-                    opt_state,
-                    local_opt_state[j],
-                    rng,
-                    i,
-                    10,
-                    ((True, True), (True, True, True)),
-                    False,
-                    td,
-                    tip_data_c,
-                )
-                assert np.isfinite(f), f
-                fs[j].append(f)
-                gs[j].append(jnp.linalg.norm(ravel_pytree(g)[0]))
-                opt_state = opt_state1
-                local_opt_state[j] = local_opt_state1
-                rng = rng1
+        br = False
+        prev = np.zeros(len(self.tds))
+        with tqdm(total=n_iter * len(self.tds)) as pbar:
+            for i in range(n_iter):
+                for j, (td, tip_data_c) in enumerate(zip(self.tds, self.tip_data_cs)):
+                    self.flows = self.global_flows | self.local_flows[j]
+                    
+                    f, g, opt_state1, local_opt_state1, rng1 = step(
+                        opt_state,
+                        local_opt_state[j],
+                        rng,
+                        i,
+                        10,
+                        ((True, True), (True, True, True)),
+                        False,
+                        td,
+                        tip_data_c,
+                    )
+                    assert np.isfinite(f), f
+                    if i > 1:
+                        prev = np.array([fz[-2] for fz in fs])
+                        curr = np.array([fz[-1] for fz in fs])
+                        diff = np.abs(prev-curr)/prev
+                        if diff.mean() < threshold:
+                            break
+                            br = True
+
+                    fs[j].append(f)
+                    gs[j].append(jnp.linalg.norm(ravel_pytree(g)[0]))
+                    opt_state = opt_state1
+                    local_opt_state[j] = local_opt_state1
+                    rng = rng1
+
+                    pbar.update(1)
+                
+
+                if br:
+                    break
+                
 
         p_star = get_params(opt_state)
         local_p_star = [get_params(lop) for lop in local_opt_state]
@@ -425,8 +495,9 @@ def _process_tree(line, sample_times):
     ]
     return td, node_mapping
 
-def _process_tips(msa, node_mapping):
-    sids, seqs = zip(*[(s.name, str(s.seq)) for s in msa])
+def _process_tips(msa, node_mapping, sids_dict):
+    sids, seqs = zip(*[(s.description, str(s.seq)) for s in msa])
+    sids = [sids_dict[s] for s in sids]
     tip_partials0 = np.array([encode_partials(seq) for seq in seqs]).transpose(
         [1, 0, 2]
     )
