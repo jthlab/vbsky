@@ -1,0 +1,4 @@
+__pycache__
+vbsky/version.py
+*.egg-info
+.ipynb_checkpoints
