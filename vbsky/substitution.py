@@ -72,7 +72,7 @@ class SubstitutionModel(NamedTuple):
 
 def HKY(kappa: float = 1) -> SubstitutionModel:
     "HKY(kappa) substitution matrix."
-    mm = msp.HKYMutationModel(kappa)
+    mm = msp.HKY(kappa)
     Q = mm.transition_matrix
     Q -= np.diag(Q.sum(1))
     pi = mm.root_distribution
