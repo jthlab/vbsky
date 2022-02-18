@@ -101,9 +101,16 @@ def get_gisaid_names(aln):
         names.append(desc[1])
     return names
 
+def get_names(aln):
+    names = []
+    for s in aln:
+        names.append(s.id)
+        s.description = s.id
+    return names
+
 class SeqData:
     def __init__(
-        self, aln, names=None, dates=None, left_end=datetime(MINYEAR, 1, 1), right_end=datetime.today(),
+        self, aln, names=None, dates=None, left_end=datetime(MINYEAR, 1, 1), right_end=datetime.today(), gisaid=True, contemp=False
     ):
         self.sids = []
         self.sids_dict = {}
@@ -111,52 +118,71 @@ class SeqData:
         self.dates = []
 
         if names is None:
-            names = get_gisaid_names(aln)
-        if dates is None:
-            dates = get_gisaid_dates(aln)
-        
-        self.date_float = isinstance(dates[0], float)
-
-        if self.date_float:
-            self.max_date = 0
-            self.min_date = float("inf")
-            if isinstance(left_end, datetime):
-                left_end = 0
-            if isinstance(right_end, datetime):
-                right_end = float("inf")
-
-        else:
-            self.max_date = datetime(MINYEAR, 1, 1)
-            self.min_date = datetime.today()
-
-        for s, name, date in zip(aln, names, dates):
-
-            if date >= left_end and date <= right_end:
-                self.sids.append(name)
-                self.dates.append(date)
-                if self.max_date < self.dates[-1]:
-                    self.max_date = self.dates[-1]
-                if self.min_date > self.dates[-1]:
-                    self.min_date = self.dates[-1]
-                self.seqs[name] = s 
-                self.sids_dict[s.description] = name
+            if gisaid:
+                names = get_gisaid_names(aln)
+            else:
+                names = get_names(aln)
 
         self.sample_times = {}
-        self.sample_months = defaultdict(list)
 
-        if self.date_float:
-            #fixme no default option for stratify when dates are floats
-            for s, d in zip(self.sids, self.dates):
-                self.sample_times[s] = self.max_date - d
-            self.earliest = self.max_date - self.min_date
+        if not contemp:
+            if dates is None:
+                dates = get_gisaid_dates(aln)
+            
+            self.date_float = isinstance(dates[0], float)
 
+            if self.date_float:
+                self.max_date = 0
+                self.min_date = float("inf")
+                if isinstance(left_end, datetime):
+                    left_end = 0
+                if isinstance(right_end, datetime):
+                    right_end = float("inf")
+
+            else:
+                self.max_date = datetime(MINYEAR, 1, 1)
+                self.min_date = datetime.today()
+
+            for s, name, date in zip(aln, names, dates):
+
+                if date >= left_end and date <= right_end:
+                    self.sids.append(name)
+                    self.dates.append(date)
+                    if self.max_date < self.dates[-1]:
+                        self.max_date = self.dates[-1]
+                    if self.min_date > self.dates[-1]:
+                        self.min_date = self.dates[-1]
+                    self.seqs[name] = s 
+                    self.sids_dict[s.description] = name
+
+            self.sample_months = defaultdict(list)
+
+            if self.date_float:
+                #fixme no default option for stratify when dates are floats
+                for s, d in zip(self.sids, self.dates):
+                    self.sample_times[s] = self.max_date - d
+                self.earliest = self.max_date - self.min_date
+
+            else:
+                for s, d in zip(self.sids, self.dates):
+                    days = (self.max_date - d).days
+                    self.sample_times[s] = days / days_in_year
+                    self.sample_months[(d.year, d.month)].append(s)
+
+                self.earliest = (self.max_date - self.min_date).days / days_in_year
+        
         else:
-            for s, d in zip(self.sids, self.dates):
-                days = (self.max_date - d).days
-                self.sample_times[s] = days / days_in_year
-                self.sample_months[(d.year, d.month)].append(s)
+            self.date_float = True
+            self.max_date = dates
+            self.min_date = dates
+            for s, name in zip(aln, names):
+                self.sids.append(name)
+                self.seqs[name] = s 
+                self.sids_dict[s.description] = name
+                self.sample_times[name] = 0.0
+                self.earliest =  0.0
+            
 
-            self.earliest = (self.max_date - self.min_date).days / days_in_year
         self.aln = MultipleSeqAlignment(list(self.seqs.values()))
 
     @property
@@ -343,7 +369,7 @@ class SeqData:
                 for td in self.tds
             ]
 
-    def loop(self, _params_prior_loglik, rng, n_iter=10, step_size=1.0, Q=HKY(2.7), threshold=0.01):
+    def loop(self, _params_prior_loglik, rng, n_iter=10, step_size=1.0, Q=HKY(2.7), threshold=0.01, dbg=False):
         opt_init, opt_update, get_params = optimizers.adagrad(step_size=step_size)
 
         @partial(jit, static_argnums=(5, 6))
@@ -424,7 +450,7 @@ class SeqData:
                         i,
                         10,
                         ((True, True), (True, True, True)),
-                        False,
+                        dbg,
                         td,
                         tip_data_c,
                     )
