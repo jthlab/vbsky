@@ -18,7 +18,7 @@ import jax
 from jax import vmap, grad, jit, value_and_grad
 from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_map, tree_leaves, tree_flatten, tree_multimap
-from jax.experimental import optimizers
+from jax.example_libraries import optimizers
 
 from Bio import SeqIO, AlignIO, Phylo
 from Bio.Align import MultipleSeqAlignment

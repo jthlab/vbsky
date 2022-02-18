@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import jax
 import numpy as np
 from jax import numpy as jnp
-from jax.experimental import stax
-from jax.experimental.stax import Relu
+from jax.example_libraries import stax
+from jax.example_libraries.stax import Relu
 
 from vbsky.prob.transform import Transformation
 
