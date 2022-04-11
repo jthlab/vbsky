@@ -69,11 +69,12 @@ class TreeData(NamedTuple):
     def siblings(self):
         siblings = jnp.zeros(self.N, dtype=int)
         for i in 0, 1:
-            siblings = jax.ops.index_update(
-                siblings,
-                jax.ops.index[self.parent_child[:, i]],
-                self.parent_child[:, 1 - i],
-            )
+            siblings = siblings.at[self.parent_child[:, i]].set(self.parent_child[:, 1 - i])
+            # siblings = jax.ops.index_update(
+            #     siblings,
+            #     jax.ops.index[self.parent_child[:, i]],
+            #     self.parent_child[:, 1 - i],
+            # )
         return siblings
 
     @property
@@ -109,7 +110,8 @@ class TreeData(NamedTuple):
                 lambda i: carry[i],
                 i,
             )
-            return jax.ops.index_update(carry, i, target), None
+            return carry.at[i].set(target), None
+            # return jax.ops.index_update(carry, i, target), None
 
         lowers, _ = jax.lax.scan(_f, lowers, self.postorder)
         return lowers
@@ -331,7 +333,8 @@ class TreeData(NamedTuple):
             pa = jnp.take(self.child_parent, i, axis=0)
             p = jnp.take(proportions, i - self.n, axis=0)
             h = (1.0 - p) * h_d + p * heights[pa]
-            heights = jax.ops.index_update(heights, i, h)
+            heights = heights.at[i].set(h)
+            # heights = jax.ops.index_update(heights, i, h)
             return heights, None
 
         def _ff(heights, i):

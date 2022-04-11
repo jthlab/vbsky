@@ -12,7 +12,10 @@ setup(
         "numpy>=1.17.0",
         "scipy>=1.5.0",
         "matplotlib>=3.0.0",
-        "msprime>=1.1.0"
+        "msprime>=1.1.0",
+        "tqdm>=4.64.0",
+        "sklearn>=0.0",
+        "networkx>2.7.1",
     ],
     packages=find_packages(),
 )

@@ -118,11 +118,15 @@ def MAF(transform, rng):
             def f(carry, i):
                 log_weight, bias = apply_fun(params, carry).split(2, axis=-1)
                 return (
-                    jax.ops.index_update(
-                        carry, i, u[i] * jnp.exp(log_weight[i]) + bias[i]
-                    ),
-                    log_weight,
+                    carry.at[i].set(u[i] * jnp.exp(log_weight[i]) + bias[i]),
+                    log_weight
                 )
+                # return (
+                #     jax.ops.index_update(
+                #         carry, i, u[i] * jnp.exp(log_weight[i]) + bias[i]
+                #     ),
+                #     log_weight,
+                # )
 
             x, log_weight = jax.lax.scan(f, init, jnp.arange(len(u)))
             log_det_jacobian = -log_weight.sum(-1)
@@ -173,11 +177,15 @@ def IAF(transform, rng):
             def f(carry, i):
                 log_weight, bias = apply_fun(params, carry).split(2)
                 return (
-                    jax.ops.index_update(
-                        carry, i, (x[i] - bias[i]) * jnp.exp(-log_weight[i])
-                    ),
-                    None,
+                    carry.at[i].set((x[i] - bias[i]) * jnp.exp(-log_weight[i])),
+                    None
                 )
+                # return (
+                #     jax.ops.index_update(
+                #         carry, i, (x[i] - bias[i]) * jnp.exp(-log_weight[i])
+                #     ),
+                #     None,
+                # )
 
             u, _ = jax.lax.scan(f, init, jnp.arange(len(x)))
             return u
@@ -216,11 +224,15 @@ def Conditional_IAF(transform, rng):
             def f(carry, i):
                 log_weight, bias = apply_fun(params, carry).split(2)
                 return (
-                    jax.ops.index_update(
-                        carry, i, (x[i] - bias[i]) * jnp.exp(-log_weight[i])
-                    ),
-                    None,
+                    carry.at[i].set((x[i] - bias[i]) * jnp.exp(-log_weight[i])),
+                    None
                 )
+                # return (
+                #     jax.ops.index_update(
+                #         carry, i, (x[i] - bias[i]) * jnp.exp(-log_weight[i])
+                #     ),
+                #     None,
+                # )
 
             u, _ = jax.lax.scan(f, init, jnp.arange(len(x)))
             return u[-self.dim :]

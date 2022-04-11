@@ -316,7 +316,8 @@ def loglik(
         times = jnp.linspace(0, tm, m + 1)
     else:
         times = tm - params["grid"]
-        times = jax.ops.index_update(times, 0, 0)
+        times = times.at[0].set(0)
+        # times = jax.ops.index_update(times, 0, 0)
     # times = id_print(times)
     xs = tm - node_heights
     if c[1]:

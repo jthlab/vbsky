@@ -101,9 +101,10 @@ class Affine(Transformation):
     """X -> L @ X + mu where L is lower triangular"""
 
     def _tril(self, vec_L) -> jnp.ndarray:
-        return jax.ops.index_update(
-            jnp.zeros([self.dim] * 2), jnp.tril_indices(self.dim), vec_L
-        )
+        return jnp.zeros([self.dim] * 2).at[jnp.tril_indices(self.dim)].set(vec_L)
+        # return jax.ops.index_update(
+        #     jnp.zeros([self.dim] * 2), jnp.tril_indices(self.dim), vec_L
+        # )
 
     @property
     def params(self) -> dict:

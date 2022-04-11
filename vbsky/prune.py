@@ -33,9 +33,13 @@ def _compute_postorder_partials(
             c = 1.0
         Pprod /= c
         return (
-            jax.ops.index_update(post, parent, Pprod),
-            jax.ops.index_update(const, parent, jnp.log(c) + const[children].sum()),
+            post.at[parent].set(Pprod),
+            const.at[parent].set(jnp.log(c) + const[children].sum()),
         ), None
+        # return (
+        #     jax.ops.index_update(post, parent, Pprod),
+        #     jax.ops.index_update(const, parent, jnp.log(c) + const[children].sum()),
+        # ), None
 
     _, A = tip_partials.shape
     init = (
@@ -69,17 +73,25 @@ def _compute_preorder_partials(
             c = 1.0
         B /= c
         return (
-            jax.ops.index_update(pre, child, B),
-            jax.ops.index_update(
-                const, child, jnp.log(c) + const[parent] + log_post_const[sib]
-            ),
-        ), None
+            pre.at[child].set(B),
+            const.at[child].set(jnp.log(c) + const[parent] + log_post_const[sib])
+            ), None
+        # return (
+        #     jax.ops.index_update(pre, child, B),
+        #     jax.ops.index_update(
+        #         const, child, jnp.log(c) + const[parent] + log_post_const[sib]
+        #     ),
+        # ), None
 
     M, A = postorder_partials.shape  # M = 2 * N - 1
     init = (
-        jax.ops.index_update(jnp.zeros([M, A]), jax.ops.index[-1, :], Q.pi),
+        jnp.zeros([M, A]).at[-1, :].set(Q.pi),
         jnp.zeros(M),
     )
+    # init = (
+    #     jax.ops.index_update(jnp.zeros([M, A]), jax.ops.index[-1, :], Q.pi),
+    #     jnp.zeros(M),
+    # )
     (pre, const), _ = scan_(f, init, td.postorder[:-1], reverse=True)
     return pre, const
 
