@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.interpolate import interp1d
 from jax import vmap
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def plot_helper(res, data, ntips):
     end = data.end
@@ -48,13 +48,16 @@ def plot_one(res, ax, param, m, start, top, end, x0, label, ci, title):
     q25, q50, q75 = np.nanquantile(np.array(y0), q=[0.025, 0.5, 0.975], axis=0)
 
     color = next(ax._get_lines.prop_cycler)["color"]
-    ax.plot(x0, q50, label=label, color=color)
+    year = np.floor(x0).astype(int)
+    x = year.astype(str).astype("datetime64[Y]") + np.around((x0-year) * 365.245 * 24 * 3600).astype('timedelta64[s]')
+    x = x.astype("datetime64[ns]")
+    ax.plot(x, q50, label=label, color=color)
 
     if ci == "fill":
-        ax.fill_between(x0, q25, q75, alpha=0.1, label="_nolegend_", color=color)
+        ax.fill_between(x, q25, q75, alpha=0.1, label="_nolegend_", color=color)
     if ci == "lines":
-        ax.plot(x0, q25, "--", label="_nolegend_", alpha=0.25, color=color)
-        ax.plot(x0, q75, "--", label="_nolegend_", alpha=0.25, color=color)
+        ax.plot(x, q25, "--", label="_nolegend_", alpha=0.25, color=color)
+        ax.plot(x, q75, "--", label="_nolegend_", alpha=0.25, color=color)
     # plt.xlim(reversed(plt.xlim()))
     # ax.set_xlabel("Year")
     ax.set_title(title)
