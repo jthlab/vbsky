@@ -73,10 +73,10 @@ def plot_by_param(res, data, axs, m, regions, param, **kwargs):
 
     for ax, r in zip(axs, regions):
         start, top, end, x0 = plot_helper(res[r], data[r], kwargs["ntips"])
-        if r != "usa":
-            title = r.title()
-        else:
+        if r == "usa" or r == "uk":
             title = r.upper()
+        else:
+            title = r.title()
         plot_one(
             res[r], ax, param, m, start, top, end, x0, kwargs["label"], kwargs["ci"], title
         )
