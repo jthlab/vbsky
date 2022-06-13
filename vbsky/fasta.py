@@ -340,7 +340,8 @@ class SeqData:
         audacity=False,
         audacity_tree_path="",
         stratified=False,
-        stratify_by=None
+        stratify_by=None,
+        cluster=False
     ):
         self.sample_trees(
             n_tips,
@@ -351,7 +352,8 @@ class SeqData:
             audacity,
             audacity_tree_path,
             stratified,
-            stratify_by
+            stratify_by,
+            cluster
         )
         self.process_trees()
         self.process_tips()
