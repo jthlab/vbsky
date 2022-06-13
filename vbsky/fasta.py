@@ -211,7 +211,8 @@ class SeqData:
         audacity=False,
         audacity_tree_path="",
         stratified=False,
-        stratify_by=None
+        stratify_by=None,
+        cluster=False
     ):
         r, c = np.tril_indices(n_tips, -1)
         constructor = DistanceTreeConstructor()
@@ -236,6 +237,18 @@ class SeqData:
                     names = np.random.choice(sequence_pool, size=n_tips, replace=False).tolist()
                 except:
                     names = sequence_pool
+
+            elif cluster:
+                start_node = np.random.choice(self.sids, size=1)[0]
+                tree = Tree(audacity_tree_path, format=1)
+                curr = tree.search_nodes(name=start_node)[0]
+                n_leaves = 1
+                while n_leaves < n_tips:
+                    curr = curr.up
+                    leaves = curr.get_leaf_names()
+                    n_leaves = len(leaves)
+                    
+                names = np.random.choice(leaves, size=n_tips, replace=False).tolist()
 
             else:
                 names = np.random.choice(self.sids, size=n_tips, replace=False).tolist()
